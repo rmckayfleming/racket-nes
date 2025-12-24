@@ -171,19 +171,20 @@ Target: *all official opcodes*, with correct flags.
 
 ### 4.1 Core memory map (`nes/memory.rkt`)
 
-* [ ] Internal RAM $0000-$07FF + mirrors to $1FFF
-* [ ] PPU regs $2000-$2007 + mirrors to $3FFF (stub read/write initially)
-* [ ] APU/IO $4000-$4017 (accept writes; stub reads)
-* [ ] Test range $4018-$401F (optional; keep as open bus or configurable)
-* [ ] Cart space $4020-$FFFF (mapper hooks)
-* [ ] (T) Unit tests for mirroring correctness and handler dispatch
+* [x] Internal RAM $0000-$07FF + mirrors to $1FFF
+* [x] PPU regs $2000-$2007 + mirrors to $3FFF (stub read/write initially)
+* [x] APU/IO $4000-$4017 (accept writes; stub reads)
+* [x] Test range $4018-$401F (optional; keep as open bus or configurable)
+* [x] Cart space $4020-$FFFF (mapper hooks)
+* [x] (T) Unit tests for mirroring correctness and handler dispatch
 
-### 4.2 Mapper 0 (NROM) skeleton (`nes/mappers/nrom.rkt`)
+### 4.2 Mapper interface + NROM (`nes/mappers/`)
 
-* [ ] PRG ROM mapping (16KB mirrored or 32KB)
-* [ ] CHR ROM/CHR RAM mapping for PPU bus (stub until PPU bus exists)
-* [ ] PRG RAM mapping (if present)
-* [ ] (T) Unit tests for PRG bank mirroring behavior
+* [x] Mapper interface (`mapper.rkt`) with CPU/PPU read/write, mirroring, IRQ, serialization
+* [x] PRG ROM mapping (16KB mirrored or 32KB)
+* [x] CHR ROM/CHR RAM mapping for PPU bus
+* [x] PRG RAM mapping ($6000-$7FFF)
+* [x] (T) Unit tests for PRG bank mirroring behavior
 
 ---
 
