@@ -89,12 +89,12 @@ Legend:
 
 ### 3.1 CPU state + interface (`lib/6502/cpu.rkt`)
 
-* [ ] Define CPU registers, flags, cycle counter, interrupt pending flags
-* [ ] Implement reset vector fetch + reset behavior
-* [ ] Implement stack ops helpers (`push8`, `pull8`, `push16`, `pull16`)
-* [ ] Implement flag helpers: `setNZ`, `setC`, etc.
-* [ ] Implement bus access wrappers that update openbus (integration point)
-* [ ] (T) Micro tests for stack/flags and reset vector
+* [x] Define CPU registers, flags, cycle counter, interrupt pending flags
+* [x] Implement reset vector fetch + reset behavior
+* [x] Implement stack ops helpers (`push8`, `pull8`, `push16`, `pull16`)
+* [x] Implement flag helpers: `setNZ`, `setC`, etc.
+* [x] Implement bus access wrappers that update openbus (integration point)
+* [x] (T) Micro tests for stack/flags and reset vector
 
 ### 3.2 Addressing modes (`lib/6502/addressing.rkt`)
 
