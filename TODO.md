@@ -49,13 +49,13 @@ Legend:
 
 ### 1.3 `nes/openbus.rkt`
 
-* [ ] Add “last data bus value” state to the NES system (or bus)
-* [ ] Add helpers:
+* [x] Add "last data bus value" state to the NES system (or bus)
+* [x] Add helpers:
 
   * `openbus-read` (returns last)
   * `openbus-update!` (on reads/writes)
-* [ ] Decide convention: which reads/writes update last value (document in code)
-* [ ] (T) Unit test basic openbus behavior in isolation
+* [x] Decide convention: which reads/writes update last value (document in code)
+* [x] (T) Unit test basic openbus behavior in isolation
 
 ### 1.4 `lib/serde.rkt` (save-state primitives)
 
