@@ -24,7 +24,7 @@ jobs:
         run: raco pkg install --auto --skip-installed sdl3
 
       - name: Install package dependencies
-        run: raco pkg install --auto --skip-installed --deps search-auto
+        run: raco pkg install --auto --skip-installed
 
       - name: Run tests
         run: raco test test/
