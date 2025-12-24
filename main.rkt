@@ -178,8 +178,12 @@
           ;; Run one frame of emulation
           (nes-run-frame! sys)
 
-          ;; Render background to framebuffer
-          (render-background! ppu pbus framebuffer)
+          ;; Render background + sprites to framebuffer
+          (define sprite0-hit (render-frame! ppu pbus framebuffer))
+
+          ;; Update sprite 0 hit flag in PPU
+          (when sprite0-hit
+            (set-ppu-sprite0-hit! ppu #t))
 
           ;; Upload and present
           (video-update-frame! video)

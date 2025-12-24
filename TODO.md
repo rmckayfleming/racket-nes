@@ -311,10 +311,10 @@ Start simple: render a single nametable without scrolling.
 
 ### 10.1 Sprite rendering basics
 
-* [ ] Implement sprite fetch from pattern tables
-* [ ] Render sprites over background with priority bits
-* [ ] Implement sprite transparency
-* [ ] Implement sprite 0 hit detection (good-enough first)
+* [x] Implement sprite fetch from pattern tables (`nes/ppu/render.rkt`)
+* [x] Render sprites over background with priority bits
+* [x] Implement sprite transparency (pixel value 0 = transparent)
+* [x] Implement sprite 0 hit detection (frame-level, not scanline-accurate)
 * [ ] Implement 8-sprites-per-scanline limit (approx first)
 
 ### 10.2 Tests
