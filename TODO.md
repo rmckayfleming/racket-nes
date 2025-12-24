@@ -98,13 +98,13 @@ Legend:
 
 ### 3.2 Addressing modes (`lib/6502/addressing.rkt`)
 
-* [ ] Implement all official addressing modes (13) returning:
+* [x] Implement all official addressing modes (13) returning:
   * effective address
   * page-crossed? boolean (for cycle penalties)
   * and/or fetched operand (immediate)
-* [ ] Implement indexed indirect / indirect indexed correctly (wrap rules)
-* [ ] Implement JMP (indirect) page-boundary bug
-* [ ] (T) Unit tests for each addressing mode with known vectors
+* [x] Implement indexed indirect / indirect indexed correctly (wrap rules)
+* [x] Implement JMP (indirect) page-boundary bug
+* [x] (T) Unit tests for each addressing mode with known vectors
 
 ### 3.3 Opcode table DSL (`lib/6502/opcodes.rkt`)
 
