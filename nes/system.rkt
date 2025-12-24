@@ -41,6 +41,10 @@
 
 (require "memory.rkt"
          "mappers/mapper.rkt"
+         "ppu/ppu.rkt"
+         "ppu/regs.rkt"
+         "ppu/bus.rkt"
+         "ppu/timing.rkt"
          "../lib/6502/cpu.rkt"
          "../lib/6502/opcodes.rkt"
          "../lib/6502/disasm.rkt"
@@ -54,11 +58,14 @@
 (struct nes
   (cpu              ; 6502 CPU
    memory           ; NES memory map
+   ppu              ; Picture Processing Unit
+   ppu-bus          ; PPU memory bus
    mapper           ; Cartridge mapper
    frame-count-box  ; Frame counter
    total-cycles-box ; Total CPU cycles executed
    trace-box        ; Trace output enabled?
-   dma-stall-box)   ; DMA stall cycles pending
+   dma-stall-box    ; DMA stall cycles pending
+   nmi-pending-box) ; NMI pending flag
   #:transparent)
 
 ;; ============================================================================
@@ -76,23 +83,51 @@
   ;; Install opcode executor
   (install-opcode-executor!)
 
-  ;; Connect mapper to memory
+  ;; Create PPU and its bus
+  (define p (make-ppu))
+  (define pbus (make-ppu-bus mapper))
+
+  ;; Connect mapper to CPU memory
   (nes-memory-set-cart-read! mem (mapper-cpu-read mapper))
   (nes-memory-set-cart-write! mem
     (λ (addr val)
-      ;; Check for OAM DMA trigger at $4014
-      ;; (This is handled by APU/IO, but we intercept it here)
       ((mapper-cpu-write mapper) addr val)))
+
+  ;; Box for NMI pending (shared between PPU and step function)
+  (define nmi-pending-box (box #f))
+
+  ;; Connect PPU registers to CPU memory
+  (nes-memory-set-ppu-read! mem
+    (λ (reg)
+      ;; reg is 0-7 (PPU register within $2000-$2007)
+      (define-values (byte nmi-changed?)
+        (ppu-reg-read p reg (λ (addr) (ppu-bus-read pbus addr))))
+      ;; Reading $2002 can affect NMI state
+      (when nmi-changed?
+        (set-box! nmi-pending-box (ppu-nmi-output? p)))
+      byte))
+
+  (nes-memory-set-ppu-write! mem
+    (λ (reg val)
+      ;; reg is 0-7 (PPU register within $2000-$2007)
+      (define nmi-changed?
+        (ppu-reg-write p reg val (λ (addr byte) (ppu-bus-write pbus addr byte))))
+      ;; Writing to $2000 can trigger NMI if vblank is set
+      (when nmi-changed?
+        (set-box! nmi-pending-box (ppu-nmi-output? p)))))
 
   ;; Create the system
   (define sys
     (nes cpu
          mem
+         p
+         pbus
          mapper
-         (box 0)     ; frame count
-         (box 0)     ; total cycles
-         (box #f)    ; trace disabled
-         (box 0)))   ; no DMA stall
+         (box 0)          ; frame count
+         (box 0)          ; total cycles
+         (box #f)         ; trace disabled
+         (box 0)          ; no DMA stall
+         nmi-pending-box))
 
   ;; Reset to initialize
   (nes-reset! sys)
@@ -126,7 +161,13 @@
 ;; Returns the number of cycles consumed
 (define (nes-step! sys)
   (define cpu (nes-cpu sys))
+  (define p (nes-ppu sys))
   (define cycles-before (cpu-cycles cpu))
+
+  ;; Check for pending NMI and signal it to CPU
+  (when (unbox (nes-nmi-pending-box sys))
+    (set-box! (nes-nmi-pending-box sys) #f)
+    (set-cpu-nmi-pending! cpu #t))
 
   ;; Print trace if enabled
   (when (nes-trace-enabled? sys)
@@ -143,28 +184,71 @@
   (set-box! (nes-total-cycles-box sys)
             (+ (unbox (nes-total-cycles-box sys)) cycles))
 
-  ;; TODO: Tick PPU by cycles * 3
+  ;; Tick PPU by cycles * 3 (PPU runs 3x faster than CPU)
+  (ppu-tick! sys (* cycles 3))
+
   ;; TODO: Tick APU by cycles
   ;; TODO: Handle DMA stalls
 
   cycles)
 
-;; Run until the next frame boundary
-;; For now, this is a placeholder that runs a fixed number of cycles
-;; (Will be PPU-driven once PPU is implemented)
-(define CYCLES-PER-FRAME 29780)  ; ~29780.5 CPU cycles per NTSC frame
+;; Advance PPU by the given number of PPU cycles
+;; Updates scanline/cycle counters and handles VBlank/NMI
+(define (ppu-tick! sys ppu-cycles)
+  (define p (nes-ppu sys))
 
+  (for ([_ (in-range ppu-cycles)])
+    (define cycle (ppu-cycle p))
+    (define scanline (ppu-scanline p))
+
+    ;; VBlank start: scanline 241, cycle 1
+    (when (and (= scanline SCANLINE-VBLANK-START)
+               (= cycle 1))
+      (set-ppu-nmi-occurred! p #t)
+      ;; Trigger NMI if enabled
+      (when (ppu-ctrl-flag? p CTRL-NMI-ENABLE)
+        (set-ppu-nmi-output! p #t)
+        (set-box! (nes-nmi-pending-box sys) #t)))
+
+    ;; Pre-render scanline (261): clear flags at cycle 1
+    (when (and (= scanline SCANLINE-PRE-RENDER)
+               (= cycle 1))
+      (set-ppu-nmi-occurred! p #f)
+      (set-ppu-nmi-output! p #f)
+      (set-ppu-sprite0-hit! p #f)
+      (set-ppu-sprite-overflow! p #f))
+
+    ;; Advance position
+    (define next-cycle (+ cycle 1))
+    (cond
+      [(>= next-cycle CYCLES-PER-SCANLINE)
+       ;; End of scanline
+       (set-ppu-cycle! p 0)
+       (define next-scanline (+ scanline 1))
+       (cond
+         [(>= next-scanline SCANLINES-TOTAL)
+          ;; End of frame
+          (set-ppu-scanline! p 0)
+          (set-ppu-frame! p (+ 1 (ppu-frame p)))
+          (set-ppu-odd-frame! p (not (ppu-odd-frame? p)))
+          ;; Increment frame counter
+          (set-box! (nes-frame-count-box sys)
+                    (+ 1 (unbox (nes-frame-count-box sys))))]
+         [else
+          (set-ppu-scanline! p next-scanline)])]
+      [else
+       (set-ppu-cycle! p next-cycle)])))
+
+;; Run until the next frame boundary (when PPU reaches scanline 0)
 (define (nes-run-frame! sys)
-  (define target-cycles (+ (nes-total-cycles sys) CYCLES-PER-FRAME))
+  (define p (nes-ppu sys))
+  (define start-frame (ppu-frame p))
 
+  ;; Run until the PPU frame counter advances
   (let loop ()
-    (when (< (nes-total-cycles sys) target-cycles)
+    (when (= (ppu-frame p) start-frame)
       (nes-step! sys)
-      (loop)))
-
-  ;; Increment frame counter
-  (set-box! (nes-frame-count-box sys)
-            (+ 1 (unbox (nes-frame-count-box sys)))))
+      (loop))))
 
 ;; ============================================================================
 ;; Reset
@@ -172,14 +256,26 @@
 
 (define (nes-reset! sys)
   (define cpu (nes-cpu sys))
+  (define p (nes-ppu sys))
 
   ;; Reset CPU (loads PC from reset vector)
   (cpu-reset! cpu)
 
+  ;; Reset PPU position
+  (set-ppu-scanline! p 0)
+  (set-ppu-cycle! p 0)
+  (set-ppu-frame! p 0)
+  (set-ppu-odd-frame! p #f)
+  (set-ppu-nmi-occurred! p #f)
+  (set-ppu-nmi-output! p #f)
+  (set-ppu-sprite0-hit! p #f)
+  (set-ppu-sprite-overflow! p #f)
+
   ;; Reset counters
   (set-box! (nes-frame-count-box sys) 0)
   (set-box! (nes-total-cycles-box sys) (cpu-cycles cpu))
-  (set-box! (nes-dma-stall-box sys) 0))
+  (set-box! (nes-dma-stall-box sys) 0)
+  (set-box! (nes-nmi-pending-box sys) #f))
 
 ;; ============================================================================
 ;; Module Tests

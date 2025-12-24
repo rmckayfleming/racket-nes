@@ -209,43 +209,43 @@ Target: *all official opcodes*, with correct flags.
 
 ### 6.1 PPU state (`nes/ppu/ppu.rkt` + `nes/ppu/timing.rkt`)
 
-* [ ] Define PPU timing constants (scanlines, cycles, vblank start/end)
-* [ ] Define PPU state:
+* [x] Define PPU timing constants (scanlines, cycles, vblank start/end)
+* [x] Define PPU state:
   * v, t, x, w (scroll/address latches)
   * status bits, mask, ctrl
   * OAM (256B), secondary OAM
   * palette RAM (32B)
   * nametable VRAM (2KB)
   * read buffer for $2007
-* [ ] Implement `ppu-tick!` advancing by 1 PPU cycle (even if Mode A batches)
+* [x] Implement `ppu-tick!` advancing by 1 PPU cycle (even if Mode A batches)
 
 ### 6.2 PPU registers semantics (`nes/ppu/regs.rkt`)
 
 Implement correct side effects early:
 
-* [ ] $2000 PPUCTRL: NMI enable, increment, pattern table selects
-* [ ] $2001 PPUMASK (store bits; rendering effects later)
-* [ ] $2002 PPUSTATUS:
+* [x] $2000 PPUCTRL: NMI enable, increment, pattern table selects
+* [x] $2001 PPUMASK (store bits; rendering effects later)
+* [x] $2002 PPUSTATUS:
   * vblank flag clear-on-read
   * resets w toggle
-* [ ] $2003 OAMADDR
-* [ ] $2004 OAMDATA read/write + auto-inc
-* [ ] $2005 PPUSCROLL: w toggle, sets x and t
-* [ ] $2006 PPUADDR: w toggle, sets t and v
-* [ ] $2007 PPUDATA:
+* [x] $2003 OAMADDR
+* [x] $2004 OAMDATA read/write + auto-inc
+* [x] $2005 PPUSCROLL: w toggle, sets x and t
+* [x] $2006 PPUADDR: w toggle, sets t and v
+* [x] $2007 PPUDATA:
   * buffered reads for non-palette
   * no buffering for palette reads
   * increment v by 1/32
-* [ ] Palette quirks:
+* [x] Palette quirks:
   * $3F10/$3F14/$3F18/$3F1C mirror to $3F00/$3F04/$3F08/$3F0C
 
 ### 6.3 PPU bus (separate from CPU bus)
 
-* [ ] Define PPU bus mapping:
+* [x] Define PPU bus mapping:
   * pattern table $0000-$1FFF from CHR ROM/RAM (mapper)
   * nametables $2000-$2FFF internal VRAM with mirroring
   * palette $3F00-$3F1F with mirrors
-* [ ] (T) Unit tests for palette mirroring and nametable mirroring modes
+* [x] (T) Unit tests for palette mirroring and nametable mirroring modes
 
 ---
 
