@@ -1,0 +1,30 @@
+name: Test
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Racket
+        uses: Bogdanp/setup-racket@v1.14
+        with:
+          architecture: x64
+          distribution: full
+          version: stable
+
+      - name: Install SDL3 package
+        run: raco pkg install --auto --skip-installed sdl3
+
+      - name: Install package dependencies
+        run: raco pkg install --auto --skip-installed --deps search-auto
+
+      - name: Run tests
+        run: raco test test/

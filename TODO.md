@@ -27,7 +27,7 @@ Legend:
 * [x] Create `test/harness/screenshot.rkt` (renders N frames → PNG)
 * [x] Set up `rackunit` test runner target (single `raco test` entry)
 * [x] Add `test/roms/.gitignore` and a README telling how to download ROMs legally + test ROMs
-* [ ] Add CI skeleton that runs unit tests and any ROM harnesses that don't require ROM blobs
+* [x] Add CI skeleton that runs unit tests and any ROM harnesses that don't require ROM blobs
 
 ---
 
