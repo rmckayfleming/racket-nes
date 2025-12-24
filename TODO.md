@@ -70,12 +70,12 @@ Legend:
 
 ### 2.1 iNES/NES2 parsing (`cart/ines.rkt`)
 
-* [ ] Parse iNES header (magic, PRG/CHR sizes, flags)
-* [ ] Parse mirroring + four-screen + battery flags
-* [ ] Detect CHR RAM vs CHR ROM
-* [ ] Parse PRG RAM size (best-effort for iNES, more correct for NES2)
-* [ ] Validate file size vs declared sizes with helpful error messages
-* [ ] (T) Parse 10+ known ROM headers (header-only tests using small fixtures)
+* [x] Parse iNES header (magic, PRG/CHR sizes, flags)
+* [x] Parse mirroring + four-screen + battery flags
+* [x] Detect CHR RAM vs CHR ROM
+* [x] Parse PRG RAM size (best-effort for iNES, more correct for NES2)
+* [x] Validate file size vs declared sizes with helpful error messages
+* [x] (T) Parse 10+ known ROM headers (header-only tests using small fixtures)
 
 ### 2.2 Save RAM (`cart/saves.rkt`)
 
