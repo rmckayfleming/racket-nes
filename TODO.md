@@ -41,11 +41,11 @@ Legend:
 
 ### 1.2 `lib/bus.rkt` (generic bus)
 
-* [ ] Define bus struct with ordered handlers: `(start end read write mirror?)`
-* [ ] Implement `bus-add-handler!` and `bus-finalize` (optional precompute)
-* [ ] Implement `bus-read`, `bus-write` with mirroring support
-* [ ] Add a “default read” handler for unmapped addresses
-* [ ] (T) Unit tests: overlapping ranges precedence, mirroring, boundary correctness
+* [x] Define bus struct with ordered handlers: `(start end read write mirror?)`
+* [x] Implement `bus-add-handler!` and `bus-finalize` (optional precompute)
+* [x] Implement `bus-read`, `bus-write` with mirroring support
+* [x] Add a "default read" handler for unmapped addresses
+* [x] (T) Unit tests: overlapping ranges precedence, mirroring, boundary correctness
 
 ### 1.3 `nes/openbus.rkt`
 
