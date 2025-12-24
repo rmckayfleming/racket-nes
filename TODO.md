@@ -253,14 +253,14 @@ Implement correct side effects early:
 
 ### 7.1 DMA implementation (`nes/dma.rkt`)
 
-* [ ] Implement $4014 write handler:
+* [x] Implement $4014 write handler:
   * source page = value << 8
   * copy 256 bytes CPU memory → PPU OAM
   * apply CPU stall cycles: 513 or 514 depending on CPU cycle parity
-* [ ] Integrate DMA stall into scheduler:
+* [x] Integrate DMA stall into scheduler:
   * easiest: after write, set `dma-stall-cycles` counter
   * each `step!` consumes stall cycles appropriately (no instruction fetch)
-* [ ] (T) Unit test:
+* [x] (T) Unit test:
   * copy correctness
   * stall cycle count parity behavior
 

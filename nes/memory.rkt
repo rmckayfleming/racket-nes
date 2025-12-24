@@ -39,7 +39,10 @@
 
  ;; Cartridge hooks (mapper handles these)
  nes-memory-set-cart-read!
- nes-memory-set-cart-write!)
+ nes-memory-set-cart-write!
+
+ ;; DMA hook
+ nes-memory-set-dma-write!)
 
 (require "../lib/bus.rkt"
          "../lib/bits.rkt")
@@ -63,7 +66,9 @@
    ctrl-write-box   ; (port byte -> void)
    ;; Cartridge callbacks
    cart-read-box    ; (addr -> byte)
-   cart-write-box)  ; (addr byte -> void)
+   cart-write-box   ; (addr byte -> void)
+   ;; DMA callback
+   dma-write-box)   ; (page -> void), triggers OAM DMA
   #:transparent)
 
 ;; ============================================================================
@@ -94,6 +99,9 @@
 (define (nes-memory-set-cart-write! mem proc)
   (set-box! (nes-memory-cart-write-box mem) proc))
 
+(define (nes-memory-set-dma-write! mem proc)
+  (set-box! (nes-memory-dma-write-box mem) proc))
+
 ;; ============================================================================
 ;; Memory Map Construction
 ;; ============================================================================
@@ -111,6 +119,7 @@
   (define ctrl-write-box (box (λ (port val) (void))))
   (define cart-read-box (box (λ (addr) #x00)))
   (define cart-write-box (box (λ (addr val) (void))))
+  (define dma-write-box (box (λ (page) (void))))
 
   ;; Create bus
   (define b (make-bus))
@@ -154,7 +163,9 @@
                                 ((unbox apu-read-box) addr)]))
                     #:write (λ (addr val)
                               (cond
-                                ;; $4014 - OAM DMA (handled specially, but write goes through)
+                                ;; $4014 - OAM DMA
+                                [(= addr #x4014)
+                                 ((unbox dma-write-box) val)]
                                 ;; $4016 - Controller strobe
                                 [(= addr #x4016)
                                  ((unbox ctrl-write-box) 0 val)]
@@ -186,7 +197,8 @@
               ppu-read-box ppu-write-box
               apu-read-box apu-write-box
               ctrl-read-box ctrl-write-box
-              cart-read-box cart-write-box))
+              cart-read-box cart-write-box
+              dma-write-box))
 
 ;; ============================================================================
 ;; Module Tests

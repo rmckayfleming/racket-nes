@@ -41,6 +41,7 @@
 
 (require "memory.rkt"
          "mappers/mapper.rkt"
+         "dma.rkt"
          "ppu/ppu.rkt"
          "ppu/regs.rkt"
          "ppu/bus.rkt"
@@ -116,6 +117,21 @@
       (when nmi-changed?
         (set-box! nmi-pending-box (ppu-nmi-output? p)))))
 
+  ;; DMA stall box (shared for DMA handler to set)
+  (define dma-stall-box (box 0))
+
+  ;; Connect DMA handler
+  (nes-memory-set-dma-write! mem
+    (λ (page)
+      ;; Perform the DMA transfer
+      (oam-dma-transfer! page (λ (addr) (bus-read bus addr)) p)
+      ;; Calculate and set stall cycles
+      ;; Note: We use total cycles to determine odd/even
+      ;; The DMA takes 513 or 514 cycles depending on alignment
+      (define current-cycles (+ (cpu-cycles cpu) (unbox dma-stall-box)))
+      (set-box! dma-stall-box (+ (unbox dma-stall-box)
+                                  (oam-dma-cycles current-cycles)))))
+
   ;; Create the system
   (define sys
     (nes cpu
@@ -126,7 +142,7 @@
          (box 0)          ; frame count
          (box 0)          ; total cycles
          (box #f)         ; trace disabled
-         (box 0)          ; no DMA stall
+         dma-stall-box
          nmi-pending-box))
 
   ;; Reset to initialize
@@ -157,40 +173,52 @@
 ;; Execution
 ;; ============================================================================
 
-;; Execute one CPU instruction
+;; Execute one CPU instruction (or consume DMA stall cycles)
 ;; Returns the number of cycles consumed
 (define (nes-step! sys)
   (define cpu (nes-cpu sys))
   (define p (nes-ppu sys))
-  (define cycles-before (cpu-cycles cpu))
+  (define dma-stall (unbox (nes-dma-stall-box sys)))
 
-  ;; Check for pending NMI and signal it to CPU
-  (when (unbox (nes-nmi-pending-box sys))
-    (set-box! (nes-nmi-pending-box sys) #f)
-    (set-cpu-nmi-pending! cpu #t))
+  ;; If there are DMA stall cycles pending, consume them instead of executing
+  (if (> dma-stall 0)
+      ;; DMA stall: consume stall cycles, tick PPU, no CPU execution
+      (let ([stall-cycles (min dma-stall 1)])  ; Process 1 cycle at a time for accuracy
+        (set-box! (nes-dma-stall-box sys) (- dma-stall stall-cycles))
+        (set-box! (nes-total-cycles-box sys)
+                  (+ (unbox (nes-total-cycles-box sys)) stall-cycles))
+        ;; Tick PPU by stall cycles * 3
+        (ppu-tick! sys (* stall-cycles 3))
+        stall-cycles)
 
-  ;; Print trace if enabled
-  (when (nes-trace-enabled? sys)
-    (displayln (trace-line cpu)))
+      ;; Normal execution
+      (let ([cycles-before (cpu-cycles cpu)])
+        ;; Check for pending NMI and signal it to CPU
+        (when (unbox (nes-nmi-pending-box sys))
+          (set-box! (nes-nmi-pending-box sys) #f)
+          (set-cpu-nmi-pending! cpu #t))
 
-  ;; Execute one instruction
-  (cpu-step! cpu)
+        ;; Print trace if enabled
+        (when (nes-trace-enabled? sys)
+          (displayln (trace-line cpu)))
 
-  ;; Calculate cycles consumed
-  (define cycles-after (cpu-cycles cpu))
-  (define cycles (- cycles-after cycles-before))
+        ;; Execute one instruction
+        (cpu-step! cpu)
 
-  ;; Update total cycles
-  (set-box! (nes-total-cycles-box sys)
-            (+ (unbox (nes-total-cycles-box sys)) cycles))
+        ;; Calculate cycles consumed
+        (define cycles-after (cpu-cycles cpu))
+        (define cycles (- cycles-after cycles-before))
 
-  ;; Tick PPU by cycles * 3 (PPU runs 3x faster than CPU)
-  (ppu-tick! sys (* cycles 3))
+        ;; Update total cycles
+        (set-box! (nes-total-cycles-box sys)
+                  (+ (unbox (nes-total-cycles-box sys)) cycles))
 
-  ;; TODO: Tick APU by cycles
-  ;; TODO: Handle DMA stalls
+        ;; Tick PPU by cycles * 3 (PPU runs 3x faster than CPU)
+        (ppu-tick! sys (* cycles 3))
 
-  cycles)
+        ;; TODO: Tick APU by cycles
+
+        cycles)))
 
 ;; Advance PPU by the given number of PPU cycles
 ;; Updates scanline/cycle counters and handles VBlank/NMI
@@ -395,4 +423,50 @@
     (nes-reset! sys)
 
     ;; Should be back at reset vector
-    (check-equal? (cpu-pc cpu) #xC000)))
+    (check-equal? (cpu-pc cpu) #xC000))
+
+  (test-case "OAM DMA transfers data and stalls CPU"
+    (define sys (make-test-system))
+    (define cpu (nes-cpu sys))
+    (define p (nes-ppu sys))
+    (define mem (nes-memory sys))
+    (define bus (nes-memory-bus mem))
+
+    ;; Write test pattern to page $02 in RAM
+    (for ([i (in-range 256)])
+      (bus-write bus (+ #x0200 i) (bitwise-and (+ i #x10) #xFF)))
+
+    ;; Record cycles before DMA
+    (define cycles-before (nes-total-cycles sys))
+
+    ;; Trigger OAM DMA by writing to $4014
+    (bus-write bus #x4014 #x02)
+
+    ;; DMA should have set stall cycles
+    (check-true (> (unbox (nes-dma-stall-box sys)) 0))
+
+    ;; Run enough steps to consume DMA stall cycles
+    (for ([_ (in-range 520)])  ; More than 514 cycles
+      (nes-step! sys))
+
+    ;; DMA stall should be consumed
+    (check-equal? (unbox (nes-dma-stall-box sys)) 0)
+
+    ;; OAM should contain the transferred data
+    (define oam (ppu-oam p))
+    (check-equal? (bytes-ref oam 0) #x10)
+    (check-equal? (bytes-ref oam 1) #x11)
+    (check-equal? (bytes-ref oam 255) #x0F))  ; #x10 + 255 = #x10F, masked to #x0F
+
+  (test-case "DMA stall cycles are correct"
+    (define sys (make-test-system))
+    (define mem (nes-memory sys))
+    (define bus (nes-memory-bus mem))
+
+    ;; Trigger DMA (starting cycles determine 513 vs 514)
+    (bus-write bus #x4014 #x00)
+
+    ;; Check that stall cycles are in expected range
+    (define stall (unbox (nes-dma-stall-box sys)))
+    (check-true (or (= stall 513) (= stall 514))
+                (format "DMA stall should be 513 or 514, got ~a" stall))))
