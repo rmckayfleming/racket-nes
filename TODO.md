@@ -157,12 +157,13 @@ Target: *all official opcodes*, with correct flags.
 
 ### 3.7 `nestest` harness (Phase 1 milestone)
 
-* [ ] Implement headless run that:
+* [x] Implement headless run that:
   * loads `nestest.nes`
   * sets PC to $C000
   * steps and compares trace line by line
-* [ ] Store reference log in `test/reference/` (not ROM)
-* [ ] (T) `cpu-test.rkt` runs and fails at first mismatch with diff context
+* [x] Store reference log in `test/reference/` (not ROM)
+* [x] (T) `test/harness/nestest.rkt` runs and fails at first mismatch with diff context
+* [x] All 5003 official opcode tests pass
 
 ---
 
