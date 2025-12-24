@@ -79,9 +79,9 @@ Legend:
 
 ### 2.2 Save RAM (`cart/saves.rkt`)
 
-* [ ] Define save path scheme (e.g., `~/.local/share/...` or next to ROM)
-* [ ] Load/save PRG RAM if battery flag set
-* [ ] (T) Unit test: write PRG RAM → persist → reload
+* [x] Define save path scheme (e.g., `~/.local/share/...` or next to ROM)
+* [x] Load/save PRG RAM if battery flag set
+* [x] (T) Unit test: write PRG RAM → persist → reload
 
 ---
 
