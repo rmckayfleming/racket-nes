@@ -59,10 +59,10 @@ Legend:
 
 ### 1.4 `lib/serde.rkt` (save-state primitives)
 
-* [ ] Define a stable serialization format (e.g., tagged vectors / bytes)
-* [ ] Implement helpers for u8vector/u16 packing
-* [ ] Provide `serde-version` and forward-compat note
-* [ ] (T) Round-trip tests on synthetic state blobs
+* [x] Define a stable serialization format (e.g., tagged vectors / bytes)
+* [x] Implement helpers for u8vector/u16 packing
+* [x] Provide `serde-version` and forward-compat note
+* [x] (T) Round-trip tests on synthetic state blobs
 
 ---
 
