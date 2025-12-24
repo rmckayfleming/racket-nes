@@ -1,0 +1,41 @@
+# Compiled Racket files
+compiled/
+*.zo
+*.dep
+
+# Backup files
+*~
+\#*\#
+.\#*
+
+# Package links
+.git/objects
+.git/refs
+.git/logs
+
+# Test ROMs (keep only the gitignore and README)
+test/roms/*.nes
+test/roms/*.NES
+
+# Save files
+*.sav
+*.srm
+
+# Screenshots (generated during tests)
+*.png
+
+# Save states
+*.state
+*.savestate
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Coverage output
+coverage/

@@ -1,0 +1,8 @@
+# Ignore all ROM files
+*.nes
+*.NES
+*.unf
+*.unif
+
+# But track the README
+!README.md
