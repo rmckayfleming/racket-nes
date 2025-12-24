@@ -37,13 +37,16 @@
  cpu-update-nz!
 
  ;; Bus access (updates open bus)
- cpu-read cpu-write
+ cpu-read cpu-write cpu-read16
 
  ;; Control
  cpu-reset!
  cpu-step!
  cpu-trigger-nmi!
- cpu-trigger-irq!)
+ cpu-trigger-irq!
+
+ ;; Opcode executor hook (set by opcodes.rkt)
+ cpu-execute-opcode)
 
 (require "../bits.rkt"
          "../bus.rkt")

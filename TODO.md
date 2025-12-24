@@ -108,46 +108,46 @@ Legend:
 
 ### 3.3 Opcode table DSL (`lib/6502/opcodes.rkt`)
 
-* [ ] Implement `define-opcode` macro that can attach:
+* [x] Implement `define-opcode` macro that can attach:
   * opcode byte
   * bytes length
   * base cycles
   * optional conditional cycles `#:cycles+`
   * disasm format
   * executor body
-* [ ] Generate decode table and disasm table from macro expansions
-* [ ] Provide `decode` function mapping opcode → executor
-* [ ] (T) Smoke test: table contains all expected opcodes, no duplicates
+* [x] Generate decode table and disasm table from macro expansions
+* [x] Provide `decode` function mapping opcode → executor
+* [x] (T) Smoke test: table contains all expected opcodes, no duplicates
 
 ### 3.4 Implement official instruction set
 
 Target: *all official opcodes*, with correct flags.
 
-* [ ] ADC/SBC (binary mode only, no decimal)
-* [ ] AND/ORA/EOR
-* [ ] ASL/LSR/ROL/ROR (incl RMW)
-* [ ] Branches (BPL/BMI/BVC/BVS/BCC/BCS/BNE/BEQ)
-* [ ] BIT
-* [ ] CMP/CPX/CPY
-* [ ] DEC/INC (incl RMW)
-* [ ] JMP/JSR/RTS/RTI
-* [ ] LDA/LDX/LDY
-* [ ] STA/STX/STY
-* [ ] PHA/PLA/PHP/PLP
-* [ ] TAX/TAY/TSX/TXA/TXS/TYA
-* [ ] CLC/SEC/CLI/SEI/CLV/CLD/SED (SED should set D flag but D has no effect)
-* [ ] NOP
-* [ ] BRK interrupt semantics (push PC+2, status with B set in pushed copy)
+* [x] ADC/SBC (binary mode only, no decimal)
+* [x] AND/ORA/EOR
+* [x] ASL/LSR/ROL/ROR (incl RMW)
+* [x] Branches (BPL/BMI/BVC/BVS/BCC/BCS/BNE/BEQ)
+* [x] BIT
+* [x] CMP/CPX/CPY
+* [x] DEC/INC (incl RMW)
+* [x] JMP/JSR/RTS/RTI
+* [x] LDA/LDX/LDY
+* [x] STA/STX/STY
+* [x] PHA/PLA/PHP/PLP
+* [x] TAX/TAY/TSX/TXA/TXS/TYA
+* [x] CLC/SEC/CLI/SEI/CLV/CLD/SED (SED should set D flag but D has no effect)
+* [x] NOP
+* [x] BRK interrupt semantics (push PC+2, status with B set in pushed copy)
 
 ### 3.5 Cycle timing correctness (Phase 1 critical)
 
-* [ ] Add page-cross penalties for relevant ops (loads, compares, etc.)
-* [ ] Branch timing:
+* [x] Add page-cross penalties for relevant ops (loads, compares, etc.)
+* [x] Branch timing:
   * not taken: +0
   * taken: +1
   * taken + page cross: +2 total
-* [ ] RMW bus behavior (at least timing-correct at instruction granularity)
-* [ ] NMI/IRQ sampling + sequencing (document model)
+* [x] RMW bus behavior (at least timing-correct at instruction granularity)
+* [x] NMI/IRQ sampling + sequencing (document model)
 
 ### 3.6 Disassembler (`lib/6502/disasm.rkt`)
 
