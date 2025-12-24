@@ -192,15 +192,16 @@ Target: *all official opcodes*, with correct flags.
 
 ### 5.1 `nes/system.rkt`
 
-* [ ] Define `nes` struct holding CPU/PPU/APU/mapper/buses/openbus
-* [ ] Implement `step!`:
+* [x] Define `nes` struct holding CPU/mapper/memory/counters
+* [x] Implement `step!`:
   * run 1 CPU instruction
   * get CPU cycles
-  * tick PPU by cycles*3
-  * tick APU by cycles
-  * apply pending DMA stalls (Phase 6)
-* [ ] Implement `run-frame!` placeholder (later becomes PPU-driven)
-* [ ] (D) Add trace toggles and “stop after N instructions” guard
+  * (TODO) tick PPU by cycles*3
+  * (TODO) tick APU by cycles
+  * (TODO) apply pending DMA stalls (Phase 7)
+* [x] Implement `run-frame!` placeholder (later becomes PPU-driven)
+* [x] (D) Add trace toggles
+* [x] (T) Unit tests for system creation, stepping, reset
 
 ---
 
