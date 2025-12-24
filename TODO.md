@@ -35,9 +35,9 @@ Legend:
 
 ### 1.1 `lib/bits.rkt`
 
-* [ ] Implement u8/u16 helpers: `u8`, `u16`, `lo`, `hi`, `merge16`, `wrap8`, `wrap16`
-* [ ] Implement bit ops: `bit?`, `set-bit`, `clear-bit`, `update-bit`, `mask`, `extract`
-* [ ] (T) Unit tests for wrap and bit ops
+* [x] Implement u8/u16 helpers: `u8`, `u16`, `lo`, `hi`, `merge16`, `wrap8`, `wrap16`
+* [x] Implement bit ops: `bit?`, `set-bit`, `clear-bit`, `update-bit`, `mask`, `extract`
+* [x] (T) Unit tests for wrap and bit ops
 
 ### 1.2 `lib/bus.rkt` (generic bus)
 
