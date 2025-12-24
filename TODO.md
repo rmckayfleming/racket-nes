@@ -328,9 +328,9 @@ Start simple: render a single nametable without scrolling.
 
 ### 11.1 Scroll correctness (t/v/x/w)
 
-* [ ] Implement coarse X/Y and fine X/Y scroll behavior
-* [ ] Implement PPUSCROLL/PPUADDR interaction fully
-* [ ] Implement nametable switching during scroll
+* [x] Implement coarse X/Y and fine X/Y scroll behavior (v register decoding)
+* [x] Implement PPUSCROLL/PPUADDR interaction fully (in regs.rkt)
+* [x] Implement nametable switching during scroll (XOR-based nt selection)
 
 ### 11.2 Split scrolling (status bars)
 

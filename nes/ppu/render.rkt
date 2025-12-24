@@ -378,7 +378,27 @@
   ;; Render sprites on top
   (render-sprites! p pbus framebuffer bg-opaque))
 
+;; ============================================================================
+;; Scroll Register Decoding
+;; ============================================================================
+
+;; Extract scroll components from v register
+;; v register format: yyy NN YYYYY XXXXX
+;;   bits 0-4:   coarse X (tile column, 0-31)
+;;   bits 5-9:   coarse Y (tile row, 0-29, wraps at 30)
+;;   bits 10-11: nametable select (0-3)
+;;   bits 12-14: fine Y (pixel row within tile, 0-7)
+(define (v-coarse-x v) (bitwise-and v #x1F))
+(define (v-coarse-y v) (bitwise-and (arithmetic-shift v -5) #x1F))
+(define (v-nametable v) (bitwise-and (arithmetic-shift v -10) #x03))
+(define (v-fine-y v) (bitwise-and (arithmetic-shift v -12) #x07))
+
+;; Get nametable base address from nametable select bits
+(define (nametable-base-addr nt-select)
+  (+ #x2000 (* nt-select #x400)))
+
 ;; Internal: render background while tracking which pixels are opaque
+;; Now uses scroll registers for proper scrolling
 (define (render-background-with-opacity! p pbus framebuffer bg-opaque)
   (define ppu-read (λ (addr) (ppu-bus-read pbus addr)))
 
@@ -386,12 +406,46 @@
   (define bg-pattern-base
     (if (ppu-ctrl-flag? p CTRL-BG-PATTERN) #x1000 #x0000))
 
-  ;; Use nametable 0 ($2000) for now
-  (define nametable-base NAMETABLE-BASE)
+  ;; Get scroll position from v and x registers
+  (define v (ppu-v p))
+  (define fine-x (ppu-x p))
+  (define coarse-x-start (v-coarse-x v))
+  (define coarse-y-start (v-coarse-y v))
+  (define fine-y-start (v-fine-y v))
+  (define nt-select (v-nametable v))
 
-  ;; Render each tile
-  (for* ([tile-y (in-range TILES-PER-COL)]
-         [tile-x (in-range TILES-PER-ROW)])
+  ;; Calculate scroll in pixels
+  (define scroll-x (+ (* coarse-x-start 8) fine-x))
+  (define scroll-y (+ (* coarse-y-start 8) fine-y-start))
+
+  ;; Render each visible pixel
+  (for* ([screen-y (in-range VISIBLE-HEIGHT)]
+         [screen-x (in-range VISIBLE-WIDTH)])
+
+    ;; Calculate which pixel in the virtual 512x480 nametable space
+    (define virt-x (+ screen-x scroll-x))
+    (define virt-y (+ screen-y scroll-y))
+
+    ;; Calculate which nametable (0-3) based on position
+    ;; Horizontal: 0/1 in left half, 2/3 in right half (if x >= 256)
+    ;; Vertical: 0/2 in top half, 1/3 in bottom half (if y >= 240)
+    (define nt-h (if (>= virt-x 256) 1 0))
+    (define nt-v (if (>= virt-y 240) 1 0))
+
+    ;; XOR with base nametable select for proper mirroring behavior
+    (define nt (bitwise-xor nt-select
+                            (bitwise-ior nt-h (arithmetic-shift nt-v 1))))
+    (define nametable-base (nametable-base-addr nt))
+
+    ;; Position within nametable (0-255, 0-239)
+    (define nt-x (remainder virt-x 256))
+    (define nt-y (remainder virt-y 240))
+
+    ;; Tile coordinates
+    (define tile-x (quotient nt-x 8))
+    (define tile-y (quotient nt-y 8))
+    (define fine-x-pixel (remainder nt-x 8))
+    (define fine-y-pixel (remainder nt-y 8))
 
     ;; Get tile index from nametable
     (define nt-addr (+ nametable-base (* tile-y TILES-PER-ROW) tile-x))
@@ -400,32 +454,26 @@
     ;; Get palette for this tile
     (define palette-index (get-attribute-palette tile-x tile-y nametable-base ppu-read))
 
-    ;; Render each row of the tile
-    (for ([row (in-range TILE-SIZE)])
-      (define pixels (decode-tile-row tile-index row bg-pattern-base ppu-read))
+    ;; Get pixel value from tile
+    (define pixels (decode-tile-row tile-index fine-y-pixel bg-pattern-base ppu-read))
+    (define pixel-value (vector-ref pixels fine-x-pixel))
+    (define color-index (get-tile-pixel palette-index pixel-value ppu-read))
 
-      ;; Write each pixel to framebuffer
-      (for ([col (in-range TILE-SIZE)])
-        (define pixel-value (vector-ref pixels col))
-        (define color-index (get-tile-pixel palette-index pixel-value ppu-read))
+    ;; Look up actual RGB color
+    (define-values (r g b) (nes-palette-ref color-index))
 
-        ;; Look up actual RGB color
-        (define-values (r g b) (nes-palette-ref color-index))
+    ;; Calculate framebuffer position
+    (define fb-offset (* (+ (* screen-y VISIBLE-WIDTH) screen-x) BYTES-PER-PIXEL))
+    (define opacity-offset (+ (* screen-y VISIBLE-WIDTH) screen-x))
 
-        ;; Calculate framebuffer position
-        (define screen-x (+ (* tile-x TILE-SIZE) col))
-        (define screen-y (+ (* tile-y TILE-SIZE) row))
-        (define fb-offset (* (+ (* screen-y VISIBLE-WIDTH) screen-x) BYTES-PER-PIXEL))
-        (define opacity-offset (+ (* screen-y VISIBLE-WIDTH) screen-x))
+    ;; Track opacity (pixel-value 0 = transparent)
+    (bytes-set! bg-opaque opacity-offset (if (= pixel-value 0) 0 1))
 
-        ;; Track opacity (pixel-value 0 = transparent)
-        (bytes-set! bg-opaque opacity-offset (if (= pixel-value 0) 0 1))
-
-        ;; Write RGBA
-        (bytes-set! framebuffer fb-offset r)
-        (bytes-set! framebuffer (+ fb-offset 1) g)
-        (bytes-set! framebuffer (+ fb-offset 2) b)
-        (bytes-set! framebuffer (+ fb-offset 3) 255)))))
+    ;; Write RGBA
+    (bytes-set! framebuffer fb-offset r)
+    (bytes-set! framebuffer (+ fb-offset 1) g)
+    (bytes-set! framebuffer (+ fb-offset 2) b)
+    (bytes-set! framebuffer (+ fb-offset 3) 255)))
 
 ;; ============================================================================
 ;; Module Tests
