@@ -25,6 +25,8 @@
  nes-cpu
  nes-mapper
  nes-ram
+ nes-controller1
+ nes-controller2
 
  ;; Execution
  nes-step!          ; Execute one CPU instruction
@@ -42,6 +44,7 @@
 (require "memory.rkt"
          "mappers/mapper.rkt"
          "dma.rkt"
+         "input/controller.rkt"
          "ppu/ppu.rkt"
          "ppu/regs.rkt"
          "ppu/bus.rkt"
@@ -62,6 +65,8 @@
    ppu              ; Picture Processing Unit
    ppu-bus          ; PPU memory bus
    mapper           ; Cartridge mapper
+   controller1      ; Player 1 controller
+   controller2      ; Player 2 controller
    frame-count-box  ; Frame counter
    total-cycles-box ; Total CPU cycles executed
    trace-box        ; Trace output enabled?
@@ -132,6 +137,23 @@
       (set-box! dma-stall-box (+ (unbox dma-stall-box)
                                   (oam-dma-cycles current-cycles)))))
 
+  ;; Create controllers
+  (define ctrl1 (make-controller))
+  (define ctrl2 (make-controller))
+
+  ;; Connect controllers to memory map
+  (nes-memory-set-controller-read! mem
+    (λ (port)
+      (if (= port 0)
+          (controller-read ctrl1)
+          (controller-read ctrl2))))
+
+  (nes-memory-set-controller-write! mem
+    (λ (port val)
+      ;; Both controllers share the same strobe signal
+      (controller-write! ctrl1 val)
+      (controller-write! ctrl2 val)))
+
   ;; Create the system
   (define sys
     (nes cpu
@@ -139,6 +161,8 @@
          p
          pbus
          mapper
+         ctrl1
+         ctrl2
          (box 0)          ; frame count
          (box 0)          ; total cycles
          (box #f)         ; trace disabled
@@ -469,4 +493,31 @@
     ;; Check that stall cycles are in expected range
     (define stall (unbox (nes-dma-stall-box sys)))
     (check-true (or (= stall 513) (= stall 514))
-                (format "DMA stall should be 513 or 514, got ~a" stall))))
+                (format "DMA stall should be 513 or 514, got ~a" stall)))
+
+  (test-case "controller input via memory-mapped I/O"
+    (define sys (make-test-system))
+    (define ctrl1 (nes-controller1 sys))
+    (define mem (nes-memory sys))
+    (define bus (nes-memory-bus mem))
+
+    ;; Press A and Start on controller 1
+    (controller-set-button! ctrl1 BUTTON-A #t)
+    (controller-set-button! ctrl1 BUTTON-START #t)
+
+    ;; Strobe to latch button state
+    (bus-write bus #x4016 1)
+    (bus-write bus #x4016 0)
+
+    ;; Read buttons via $4016
+    (check-equal? (bus-read bus #x4016) 1 "A pressed")
+    (check-equal? (bus-read bus #x4016) 0 "B not pressed")
+    (check-equal? (bus-read bus #x4016) 0 "Select not pressed")
+    (check-equal? (bus-read bus #x4016) 1 "Start pressed")
+    (check-equal? (bus-read bus #x4016) 0 "Up not pressed")
+    (check-equal? (bus-read bus #x4016) 0 "Down not pressed")
+    (check-equal? (bus-read bus #x4016) 0 "Left not pressed")
+    (check-equal? (bus-read bus #x4016) 0 "Right not pressed")
+
+    ;; After 8 reads, should return 1
+    (check-equal? (bus-read bus #x4016) 1 "Post-8 read")))

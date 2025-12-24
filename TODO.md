@@ -295,10 +295,10 @@ Start simple: render a single nametable without scrolling.
 
 ### 9.1 Controller shift register (`nes/input/controller.rkt`)
 
-* [ ] Implement $4016 strobe behavior
-* [ ] Implement serial reads for 8 buttons
-* [ ] Decide/document post-8 reads behavior (approx acceptable initially)
-* [ ] (T) Unit test: known read sequences given button states
+* [x] Implement $4016 strobe behavior
+* [x] Implement serial reads for 8 buttons
+* [x] Decide/document post-8 reads behavior (returns 1 for official controller compatibility)
+* [x] (T) Unit test: known read sequences given button states
 
 ### 9.2 SDL input mapping (`frontend/input.rkt` + `nes/input/mapping.rkt`)
 
