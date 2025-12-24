@@ -270,23 +270,23 @@ Implement correct side effects early:
 
 ### 8.1 Frontend video pipeline (`frontend/video.rkt`)
 
-* [ ] Create SDL window + texture
-* [ ] Upload RGBA framebuffer
-* [ ] Integer scaling support
-* [ ] (T) Smoke test: render solid color pattern
+* [x] Create SDL window + texture
+* [x] Upload RGBA framebuffer (streaming texture with lock/unlock)
+* [x] Integer scaling support (1x-8x, keyboard keys 1-4)
+* [x] (T) Smoke test: render solid color pattern
 
 ### 8.2 Deterministic palette (`nes/ppu/palette.rkt`)
 
-* [ ] Choose and document a fixed 64-color palette for tests
-* [ ] Implement palette lookup function returning RGBA
+* [x] Choose and document a fixed 64-color palette for tests (2C02 approximation)
+* [x] Implement palette lookup function returning RGBA
 
 ### 8.3 Background rendering (incremental)
 
 Start simple: render a single nametable without scrolling.
 
-* [ ] Implement pattern table fetch from CHR
-* [ ] Implement nametable + attribute table interpretation
-* [ ] Render background into framebuffer (256×240)
+* [x] Implement pattern table fetch from CHR (`nes/ppu/render.rkt`)
+* [x] Implement nametable + attribute table interpretation
+* [x] Render background into framebuffer (256×240)
 * [ ] (T) Screenshot test for a known title screen (once stable)
 
 ---
@@ -300,10 +300,10 @@ Start simple: render a single nametable without scrolling.
 * [x] Decide/document post-8 reads behavior (returns 1 for official controller compatibility)
 * [x] (T) Unit test: known read sequences given button states
 
-### 9.2 SDL input mapping (`frontend/input.rkt` + `nes/input/mapping.rkt`)
+### 9.2 SDL input mapping (`main.rkt` integration)
 
-* [ ] Map keyboard/gamepad to NES buttons
-* [ ] Poll/update controller state once per frame (or per event)
+* [x] Map keyboard to NES buttons (arrows=D-pad, Z=A, X=B, Enter=Start, RShift=Select)
+* [x] Poll/update controller state per event in main loop
 
 ---
 

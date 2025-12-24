@@ -23,6 +23,8 @@
 
  ;; Accessors
  nes-cpu
+ nes-ppu
+ nes-ppu-bus
  nes-mapper
  nes-ram
  nes-controller1
