@@ -151,9 +151,9 @@ Target: *all official opcodes*, with correct flags.
 
 ### 3.6 Disassembler (`lib/6502/disasm.rkt`)
 
-* [ ] Use opcode table metadata to format lines
-* [ ] Provide `trace-line` matching nestest-style formatting
-* [ ] (T) Golden tests for a few known instructions
+* [x] Use opcode table metadata to format lines
+* [x] Provide `trace-line` matching nestest-style formatting
+* [x] (T) Golden tests for a few known instructions
 
 ### 3.7 `nestest` harness (Phase 1 milestone)
 
