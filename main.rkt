@@ -167,9 +167,9 @@
                (controller-set-button! ctrl1 BUTTON-START #t) #f]
               [(key-event 'up 'return _ _ _)
                (controller-set-button! ctrl1 BUTTON-START #f) #f]
-              [(key-event 'down 'rshift _ _ _)
+              [(key-event 'down 'right-shift _ _ _)
                (controller-set-button! ctrl1 BUTTON-SELECT #t) #f]
-              [(key-event 'up 'rshift _ _ _)
+              [(key-event 'up 'right-shift _ _ _)
                (controller-set-button! ctrl1 BUTTON-SELECT #f) #f]
 
               [_ #f])))
