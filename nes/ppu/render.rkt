@@ -26,7 +26,6 @@
 
 (provide
  ;; Main rendering functions
- render-background!
  render-sprites!
  render-frame!           ; Combined background + sprites
 
@@ -299,60 +298,6 @@
       (ppu-read (+ #x3F00 (* palette-index 4) pixel-value))))
 
 ;; ============================================================================
-;; Background Rendering
-;; ============================================================================
-
-;; Render the background to a framebuffer
-;; p: PPU state
-;; pbus: PPU bus for memory access
-;; framebuffer: bytes object (256*240*4 bytes, RGBA format)
-;;
-;; This renders the current nametable without scrolling.
-(define (render-background! p pbus framebuffer)
-  (define ppu-read (λ (addr) (ppu-bus-read pbus addr)))
-
-  ;; Get pattern table address from PPUCTRL
-  (define bg-pattern-base
-    (if (ppu-ctrl-flag? p CTRL-BG-PATTERN) #x1000 #x0000))
-
-  ;; Use nametable 0 ($2000) for now
-  (define nametable-base NAMETABLE-BASE)
-
-  ;; Render each tile
-  (for* ([tile-y (in-range TILES-PER-COL)]
-         [tile-x (in-range TILES-PER-ROW)])
-
-    ;; Get tile index from nametable
-    (define nt-addr (+ nametable-base (* tile-y TILES-PER-ROW) tile-x))
-    (define tile-index (ppu-read nt-addr))
-
-    ;; Get palette for this tile
-    (define palette-index (get-attribute-palette tile-x tile-y nametable-base ppu-read))
-
-    ;; Render each row of the tile
-    (for ([row (in-range TILE-SIZE)])
-      (define pixels (decode-tile-row tile-index row bg-pattern-base ppu-read))
-
-      ;; Write each pixel to framebuffer
-      (for ([col (in-range TILE-SIZE)])
-        (define pixel-value (vector-ref pixels col))
-        (define color-index (get-tile-pixel palette-index pixel-value ppu-read))
-
-        ;; Look up actual RGB color
-        (define-values (r g b) (nes-palette-ref color-index))
-
-        ;; Calculate framebuffer position
-        (define screen-x (+ (* tile-x TILE-SIZE) col))
-        (define screen-y (+ (* tile-y TILE-SIZE) row))
-        (define fb-offset (* (+ (* screen-y VISIBLE-WIDTH) screen-x) BYTES-PER-PIXEL))
-
-        ;; Write RGBA
-        (bytes-set! framebuffer fb-offset r)
-        (bytes-set! framebuffer (+ fb-offset 1) g)
-        (bytes-set! framebuffer (+ fb-offset 2) b)
-        (bytes-set! framebuffer (+ fb-offset 3) 255)))))
-
-;; ============================================================================
 ;; Sprite Rendering
 ;; ============================================================================
 
@@ -369,9 +314,9 @@
 ;; pbus: PPU bus for memory access
 ;; framebuffer: bytes object (256*240*4 bytes, RGBA format)
 ;; bg-opaque: optional bytes object tracking which BG pixels are opaque
-;;            (used for sprite priority and sprite 0 hit)
+;;            (used for sprite priority)
 ;;
-;; Returns: #t if sprite 0 was hit this frame, #f otherwise
+;; Note: Sprite 0 hit is detected per-cycle in ppu-tick!, not here.
 (define (render-sprites! p pbus framebuffer [bg-opaque #f])
   (define ppu-read (λ (addr) (ppu-bus-read pbus addr)))
   (define oam (ppu-oam p))
@@ -383,9 +328,6 @@
   ;; Check if 8x16 sprites are enabled (bit 5 of PPUCTRL)
   (define sprite-height
     (if (ppu-ctrl-flag? p CTRL-SPRITE-SIZE) 16 8))
-
-  ;; Track sprite 0 hit
-  (define sprite0-hit? #f)
 
   ;; Render sprites in reverse order (sprite 0 has highest priority)
   ;; This means we render 63->0 so sprite 0 ends up on top
@@ -456,15 +398,6 @@
                        (= 1 (bytes-ref bg-opaque
                                        (+ (* pixel-y VISIBLE-WIDTH) pixel-x)))))
 
-                ;; Sprite 0 hit detection:
-                ;; - Sprite 0 opaque pixel overlaps BG opaque pixel
-                ;; - Not at x=255
-                ;; - Both BG and sprites enabled (we assume they are for now)
-                (when (and (= sprite-num 0)
-                           bg-is-opaque
-                           (< pixel-x 255))
-                  (set! sprite0-hit? #t))
-
                 ;; Draw sprite pixel based on priority
                 ;; 'front: sprite draws over BG
                 ;; 'behind: sprite only draws where BG is transparent
@@ -480,9 +413,7 @@
                     (bytes-set! framebuffer fb-offset r)
                     (bytes-set! framebuffer (+ fb-offset 1) g)
                     (bytes-set! framebuffer (+ fb-offset 2) b)
-                    (bytes-set! framebuffer (+ fb-offset 3) 255))))))))))
-
-  sprite0-hit?)
+                    (bytes-set! framebuffer (+ fb-offset 3) 255)))))))))))
 
 ;; ============================================================================
 ;; Combined Frame Rendering
@@ -492,8 +423,6 @@
 ;; p: PPU state
 ;; pbus: PPU bus for memory access
 ;; framebuffer: bytes object (256*240*4 bytes, RGBA format)
-;;
-;; Returns: #t if sprite 0 was hit this frame
 (define (render-frame! p pbus framebuffer)
   ;; Create a buffer to track background opacity for sprite priority
   (define bg-opaque (make-bytes (* VISIBLE-WIDTH VISIBLE-HEIGHT) 0))

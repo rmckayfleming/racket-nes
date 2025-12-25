@@ -134,11 +134,10 @@
       ;; Perform the DMA transfer
       (oam-dma-transfer! page (λ (addr) (bus-read bus addr)) p)
       ;; Calculate and set stall cycles
-      ;; Note: We use total cycles to determine odd/even
-      ;; The DMA takes 513 or 514 cycles depending on alignment
-      (define current-cycles (+ (cpu-cycles cpu) (unbox dma-stall-box)))
+      ;; Use CPU cycles at time of DMA trigger (not including pending stalls)
+      ;; The DMA takes 513 or 514 cycles depending on odd/even alignment
       (set-box! dma-stall-box (+ (unbox dma-stall-box)
-                                  (oam-dma-cycles current-cycles)))))
+                                  (oam-dma-cycles (cpu-cycles cpu))))))
 
   ;; Create controllers
   (define ctrl1 (make-controller))
@@ -324,8 +323,17 @@
       (when (check-sprite0-hit? p pbus scanline x)
         (set-ppu-sprite0-hit! p #t)))
 
+    ;; Odd frame cycle skip: on pre-render scanline, cycle 0, if rendering
+    ;; is enabled and this is an odd frame, skip cycle 0 (go directly to 1)
+    ;; Reference: https://www.nesdev.org/wiki/PPU_frame_timing
+    (define skip-cycle?
+      (and (= scanline SCANLINE-PRE-RENDER)
+           (= cycle 0)
+           (ppu-odd-frame? p)
+           (ppu-rendering-enabled? p)))
+
     ;; Advance position
-    (define next-cycle (+ cycle 1))
+    (define next-cycle (+ cycle (if skip-cycle? 2 1)))
     (cond
       [(>= next-cycle CYCLES-PER-SCANLINE)
        ;; End of scanline
