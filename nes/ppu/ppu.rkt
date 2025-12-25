@@ -52,6 +52,11 @@
  ;; NMI output
  ppu-nmi-output? set-ppu-nmi-output!
 
+ ;; Per-scanline scroll capture (for rendering)
+ ppu-scanline-scroll
+ ppu-scanline-fine-x
+ ppu-capture-scanline-scroll!
+
  ;; CTRL register bits
  CTRL-NAMETABLE-X
  CTRL-NAMETABLE-Y
@@ -155,7 +160,13 @@
    sprite-overflow-box ; Sprite overflow detected
 
    ;; NMI output line
-   nmi-output-box)    ; NMI should be generated
+   nmi-output-box     ; NMI should be generated
+
+   ;; Per-scanline scroll capture for rendering
+   ;; This captures the v register at the start of each visible scanline
+   ;; so that the renderer can use the correct scroll position
+   scanline-scroll-buffer   ; Vector of 240 v-register values
+   scanline-fine-x-buffer)  ; Vector of 240 fine-x values
   #:transparent)
 
 ;; ============================================================================
@@ -181,7 +192,9 @@
        (box #f)                   ; nmi occurred
        (box #f)                   ; sprite 0 hit
        (box #f)                   ; sprite overflow
-       (box #f)))                 ; nmi output
+       (box #f)                   ; nmi output
+       (make-vector 240 0)        ; scanline scroll buffer
+       (make-vector 240 0)))      ; scanline fine-x buffer
 
 ;; ============================================================================
 ;; Register Accessors
@@ -240,6 +253,18 @@
 ;; NMI output
 (define (ppu-nmi-output? p) (unbox (ppu-nmi-output-box p)))
 (define (set-ppu-nmi-output! p v) (set-box! (ppu-nmi-output-box p) v))
+
+;; Per-scanline scroll capture
+(define (ppu-scanline-scroll p scanline)
+  (vector-ref (ppu-scanline-scroll-buffer p) scanline))
+
+(define (ppu-scanline-fine-x p scanline)
+  (vector-ref (ppu-scanline-fine-x-buffer p) scanline))
+
+(define (ppu-capture-scanline-scroll! p scanline)
+  (when (and (>= scanline 0) (< scanline 240))
+    (vector-set! (ppu-scanline-scroll-buffer p) scanline (ppu-v p))
+    (vector-set! (ppu-scanline-fine-x-buffer p) scanline (ppu-x p))))
 
 ;; ============================================================================
 ;; Helper Functions

@@ -37,6 +37,7 @@
 
 (require ffi/unsafe
          sdl3
+         sdl3/private/constants
          "../nes/ppu/timing.rkt")
 
 ;; ============================================================================
@@ -82,9 +83,11 @@
                           #:window-flags 'resizable))
 
   ;; Create streaming texture for efficient updates
-  ;; Using RGBA8888 format
+  ;; Use ABGR8888 format because our framebuffer stores bytes as [R,G,B,A]
+  ;; and on little-endian systems, SDL reads 32-bit values as ABGR from that byte layout
   (define tex (create-texture rend NES-WIDTH NES-HEIGHT
                               #:access 'streaming
+                              #:format SDL_PIXELFORMAT_ABGR8888
                               #:scale 'nearest))  ; Pixelated look
 
   ;; Create framebuffer

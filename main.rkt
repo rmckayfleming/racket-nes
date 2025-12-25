@@ -176,14 +176,11 @@
 
         (unless should-quit?
           ;; Run one frame of emulation
+          ;; (Sprite 0 hit is now detected during PPU tick, not after rendering)
           (nes-run-frame! sys)
 
           ;; Render background + sprites to framebuffer
-          (define sprite0-hit (render-frame! ppu pbus framebuffer))
-
-          ;; Update sprite 0 hit flag in PPU
-          (when sprite0-hit
-            (set-ppu-sprite0-hit! ppu #t))
+          (render-frame! ppu pbus framebuffer)
 
           ;; Upload and present
           (video-update-frame! video)
