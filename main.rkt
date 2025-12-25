@@ -21,6 +21,9 @@
          "cart/ines.rkt"
          "nes/system.rkt"
          "nes/mappers/nrom.rkt"
+         "nes/mappers/mmc1.rkt"
+         "nes/mappers/uxrom.rkt"
+         "nes/mappers/cnrom.rkt"
          "nes/mappers/mapper.rkt"
          "nes/ppu/ppu.rkt"
          "nes/ppu/render.rkt"
@@ -65,8 +68,11 @@
   (define mapper-num (rom-mapper rom))
   (case mapper-num
     [(0) (make-nrom-mapper rom)]
+    [(1) (make-mmc1-mapper rom)]
+    [(2) (make-uxrom-mapper rom)]
+    [(3) (make-cnrom-mapper rom)]
     [else
-     (eprintf "Warning: Mapper ~a not implemented, using NROM\n" mapper-num)
+     (eprintf "Warning: Mapper ~a not implemented, falling back to NROM\n" mapper-num)
      (make-nrom-mapper rom)]))
 
 ;; Run in headless mode (no video)

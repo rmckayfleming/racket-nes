@@ -343,7 +343,7 @@ Start simple: render a single nametable without scrolling.
 
 ### 12.1 Common mapper interface (`nes/mappers/mapper.rkt`)
 
-* [ ] Define clear interface:
+* [x] Define clear interface:
   * CPU read/write
   * PPU read/write
   * mirroring control
@@ -352,18 +352,18 @@ Start simple: render a single nametable without scrolling.
 
 ### 12.2 Implement mappers
 
-* [ ] MMC1
+* [x] MMC1
   * [x] shift register writes
-  * [ ] PRG bank modes
-  * [ ] CHR bank modes
-  * [ ] mirroring control
-  * [ ] PRG RAM enable
+  * [x] PRG bank modes (0/1=32KB, 2=fix first, 3=fix last)
+  * [x] CHR bank modes (4KB and 8KB)
+  * [x] mirroring control
+  * [x] PRG RAM enable
   * [ ] (T) Zelda boots + saves
-* [ ] UxROM
-  * [ ] fixed/variable PRG bank
+* [x] UxROM
+  * [x] fixed/variable PRG bank (16KB switchable at $8000, fixed last at $C000)
   * [ ] (T) Mega Man runs
-* [ ] CNROM
-  * [ ] CHR bank switching
+* [x] CNROM
+  * [x] CHR bank switching (8KB banks)
   * [ ] (T) Gradius runs
 * [ ] MMC3
   * [ ] PRG/CHR bank regs
