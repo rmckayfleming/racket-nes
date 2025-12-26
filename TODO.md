@@ -375,22 +375,30 @@ Start simple: render a single nametable without scrolling.
 
 ## 13. APU: Semantics First (silent-but-correct)
 
-### 13.1 Register map (`nes/apu/regs.rkt`)
+### 13.1 Register map (`nes/apu/apu.rkt`)
 
-* [ ] Store all APU regs with correct write side effects
-* [ ] Status register reads, channel enables
-* [ ] Frame counter config
+* [x] Store all APU regs with correct write side effects
+* [x] Status register reads, channel enables
+* [x] Frame counter config
+* [x] Length counter table and loading
 
-### 13.2 Frame counter + IRQ (`nes/apu/framecounter.rkt`)
+### 13.2 Frame counter + IRQ
 
-* [ ] Implement sequencing for 4-step/5-step
-* [ ] Frame IRQ behavior
+* [x] Implement sequencing for 4-step/5-step
+* [x] Frame IRQ behavior (set on step 4 in 4-step mode, inhibit flag)
+* [x] Quarter-frame clocking (linear counter, envelopes)
+* [x] Half-frame clocking (length counters, sweep)
+* [x] Integrated into system scheduler
 * [ ] (T) APU timing/IRQ test ROM harness (pass where applicable)
 
 ### 13.3 DMC DMA hooks (logic before sound)
 
-* [ ] Implement DMC address/length regs
-* [ ] Schedule memory reads and CPU cycle stealing hooks (even if output muted)
+* [x] Implement DMC address/length regs
+* [x] DMC rate timer and sample fetch scheduling
+* [x] DMC sample buffer with 8-bit shift register output
+* [x] CPU cycle stealing (4 cycles per sample byte fetch)
+* [x] DMC IRQ on sample completion (non-looping)
+* [x] Integrated into system scheduler
 * [ ] (T) DMC timing sanity tests (as available)
 
 ---

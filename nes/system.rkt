@@ -52,6 +52,7 @@
          "ppu/bus.rkt"
          "ppu/timing.rkt"
          "ppu/render.rkt"
+         "apu/apu.rkt"
          "../lib/6502/cpu.rkt"
          "../lib/6502/opcodes.rkt"
          "../lib/6502/disasm.rkt"
@@ -67,6 +68,7 @@
    memory           ; NES memory map
    ppu              ; Picture Processing Unit
    ppu-bus          ; PPU memory bus
+   apu              ; Audio Processing Unit
    mapper           ; Cartridge mapper
    controller1      ; Player 1 controller
    controller2      ; Player 2 controller
@@ -156,12 +158,28 @@
       (controller-write! ctrl1 val)
       (controller-write! ctrl2 val)))
 
+  ;; Create APU
+  (define ap (make-apu))
+
+  ;; Connect APU to CPU bus for DMC sample reads
+  (apu-set-memory-reader! ap (λ (addr) (bus-read bus addr)))
+
+  ;; Connect APU registers to memory map
+  (nes-memory-set-apu-read! mem
+    (λ (addr)
+      (apu-read ap addr)))
+
+  (nes-memory-set-apu-write! mem
+    (λ (addr val)
+      (apu-write! ap addr val)))
+
   ;; Create the system
   (define sys
     (nes cpu
          mem
          p
          pbus
+         ap
          mapper
          ctrl1
          ctrl2
@@ -242,7 +260,19 @@
         ;; Tick PPU by cycles * 3 (PPU runs 3x faster than CPU)
         (ppu-tick! sys (* cycles 3))
 
-        ;; TODO: Tick APU by cycles
+        ;; Tick APU by cycles (APU runs at CPU clock rate)
+        (apu-tick! (nes-apu sys) cycles)
+
+        ;; Check for DMC DMA stall cycles and add to stall counter
+        (define dmc-stall (apu-dmc-stall-cycles (nes-apu sys)))
+        (when (> dmc-stall 0)
+          (set-box! (nes-dma-stall-box sys)
+                    (+ (unbox (nes-dma-stall-box sys)) dmc-stall))
+          (apu-clear-dmc-stall-cycles! (nes-apu sys)))
+
+        ;; Check for APU IRQ and signal to CPU
+        (when (apu-irq-pending? (nes-apu sys))
+          (set-cpu-irq-pending! cpu #t))
 
         cycles)))
 
