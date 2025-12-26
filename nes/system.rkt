@@ -29,6 +29,10 @@
  nes-ram
  nes-controller1
  nes-controller2
+ nes-apu
+
+ ;; Audio callback
+ nes-set-audio-callback!  ; Set callback for audio samples
 
  ;; Execution
  nes-step!          ; Execute one CPU instruction
@@ -76,7 +80,8 @@
    total-cycles-box ; Total CPU cycles executed
    trace-box        ; Trace output enabled?
    dma-stall-box    ; DMA stall cycles pending
-   nmi-pending-box) ; NMI pending flag
+   nmi-pending-box  ; NMI pending flag
+   audio-callback-box) ; Audio sample callback (sample cycles -> void)
   #:transparent)
 
 ;; ============================================================================
@@ -187,7 +192,8 @@
          (box 0)          ; total cycles
          (box #f)         ; trace disabled
          dma-stall-box
-         nmi-pending-box))
+         nmi-pending-box
+         (box #f)))       ; audio callback (disabled by default)
 
   ;; Reset to initialize
   (nes-reset! sys)
@@ -213,6 +219,12 @@
 (define (nes-set-trace! sys enabled?)
   (set-box! (nes-trace-box sys) enabled?))
 
+;; Set audio callback (called with (sample cycles) during execution)
+;; sample: float 0.0-1.0 (mixed APU output)
+;; cycles: number of CPU cycles this represents
+(define (nes-set-audio-callback! sys callback)
+  (set-box! (nes-audio-callback-box sys) callback))
+
 ;; ============================================================================
 ;; Execution
 ;; ============================================================================
@@ -233,6 +245,18 @@
                   (+ (unbox (nes-total-cycles-box sys)) stall-cycles))
         ;; Tick PPU by stall cycles * 3
         (ppu-tick! sys (* stall-cycles 3))
+        ;; Tick APU by stall cycles (APU runs at CPU clock rate)
+        (apu-tick! (nes-apu sys) stall-cycles)
+        ;; Call audio callback if set
+        (define audio-cb (unbox (nes-audio-callback-box sys)))
+        (when audio-cb
+          (audio-cb (apu-output (nes-apu sys)) stall-cycles))
+        ;; Check for DMC DMA stall cycles and add to stall counter
+        (define dmc-stall (apu-dmc-stall-cycles (nes-apu sys)))
+        (when (> dmc-stall 0)
+          (set-box! (nes-dma-stall-box sys)
+                    (+ (unbox (nes-dma-stall-box sys)) dmc-stall))
+          (apu-clear-dmc-stall-cycles! (nes-apu sys)))
         stall-cycles)
 
       ;; Normal execution
@@ -262,6 +286,11 @@
 
         ;; Tick APU by cycles (APU runs at CPU clock rate)
         (apu-tick! (nes-apu sys) cycles)
+
+        ;; Call audio callback if set
+        (define audio-cb (unbox (nes-audio-callback-box sys)))
+        (when audio-cb
+          (audio-cb (apu-output (nes-apu sys)) cycles))
 
         ;; Check for DMC DMA stall cycles and add to stall counter
         (define dmc-stall (apu-dmc-stall-cycles (nes-apu sys)))

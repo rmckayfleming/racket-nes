@@ -41,6 +41,14 @@
  apu-clear-dmc-stall-cycles!
  apu-set-memory-reader!
 
+ ;; Audio output
+ apu-output            ; Get current mixed audio output (0.0 to 1.0)
+ apu-pulse1-output     ; Individual channel outputs (0-15)
+ apu-pulse2-output
+ apu-triangle-output
+ apu-noise-output
+ apu-dmc-output        ; DMC output (0-127)
+
  ;; State access (for debugging/save states)
  apu-frame-counter-mode
  apu-frame-irq-inhibit?
@@ -48,7 +56,8 @@
  apu-dmc-irq-pending?
  apu-dmc-bytes-remaining)
 
-(require "../../lib/bits.rkt")
+(require "../../lib/bits.rkt"
+         "mixer.rkt")
 
 ;; ============================================================================
 ;; Length Counter Lookup Table
@@ -156,8 +165,59 @@
 
    ;; ---- Memory Access (for DMC sample reads) ----
    memory-reader-box        ; Callback: (addr -> byte) for reading samples
+
+   ;; ---- Audio Output State ----
+   ;; Pulse 1 audio state
+   pulse1-timer-counter-box     ; Current timer countdown
+   pulse1-sequence-pos-box      ; Position in duty sequence (0-7)
+   pulse1-envelope-decay-box    ; Envelope decay level (0-15)
+   pulse1-envelope-divider-box  ; Envelope divider countdown
+   pulse1-envelope-start-box    ; Envelope start flag
+   pulse1-sweep-divider-box     ; Sweep divider countdown
+   pulse1-sweep-reload-box      ; Sweep reload flag
+
+   ;; Pulse 2 audio state
+   pulse2-timer-counter-box
+   pulse2-sequence-pos-box
+   pulse2-envelope-decay-box
+   pulse2-envelope-divider-box
+   pulse2-envelope-start-box
+   pulse2-sweep-divider-box
+   pulse2-sweep-reload-box
+
+   ;; Triangle audio state
+   tri-timer-counter-box        ; Timer countdown
+   tri-sequence-pos-box         ; Position in triangle sequence (0-31)
+
+   ;; Noise audio state
+   noise-timer-counter-box      ; Timer countdown
+   noise-shift-register-box     ; 15-bit LFSR
+   noise-envelope-decay-box     ; Envelope decay level (0-15)
+   noise-envelope-divider-box   ; Envelope divider countdown
+   noise-envelope-start-box     ; Envelope start flag
    )
   #:transparent)
+
+;; ============================================================================
+;; Duty Cycle Sequences
+;; ============================================================================
+
+;; Pulse duty cycle waveforms (8 steps each)
+(define DUTY-TABLE
+  (vector
+   #(0 1 0 0 0 0 0 0)   ; 12.5%
+   #(0 1 1 0 0 0 0 0)   ; 25%
+   #(0 1 1 1 1 0 0 0)   ; 50%
+   #(1 0 0 1 1 1 1 1))) ; 75%
+
+;; Triangle wave is a 32-step sequence
+(define TRIANGLE-SEQUENCE
+  (vector 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0
+          0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15))
+
+;; Noise period table (NTSC)
+(define NOISE-PERIOD-TABLE
+  (vector 4 8 16 32 64 96 128 160 202 254 380 508 762 1016 2034 4068))
 
 ;; ============================================================================
 ;; APU Creation
@@ -205,7 +265,36 @@
    (box 0)
 
    ;; Memory reader (set by system after creation)
-   (box (λ (addr) 0))))
+   (box (λ (addr) 0))
+
+   ;; Audio output state - Pulse 1
+   (box 0)    ; timer counter
+   (box 0)    ; sequence position
+   (box 15)   ; envelope decay (starts at max)
+   (box 0)    ; envelope divider
+   (box #f)   ; envelope start
+   (box 0)    ; sweep divider
+   (box #f)   ; sweep reload
+
+   ;; Audio output state - Pulse 2
+   (box 0)    ; timer counter
+   (box 0)    ; sequence position
+   (box 15)   ; envelope decay
+   (box 0)    ; envelope divider
+   (box #f)   ; envelope start
+   (box 0)    ; sweep divider
+   (box #f)   ; sweep reload
+
+   ;; Audio output state - Triangle
+   (box 0)    ; timer counter
+   (box 0)    ; sequence position
+
+   ;; Audio output state - Noise
+   (box 0)    ; timer counter
+   (box 1)    ; shift register (starts at 1)
+   (box 15)   ; envelope decay
+   (box 0)    ; envelope divider
+   (box #f))) ; envelope start
 
 ;; ============================================================================
 ;; Frame Counter Timing
@@ -272,7 +361,8 @@
      (set-box! (apu-pulse1-sweep-enable-box ap) (bit? val 7))
      (set-box! (apu-pulse1-sweep-period-box ap) (extract val 4 3))
      (set-box! (apu-pulse1-sweep-negate-box ap) (bit? val 3))
-     (set-box! (apu-pulse1-sweep-shift-box ap) (bitwise-and val #x07))]
+     (set-box! (apu-pulse1-sweep-shift-box ap) (bitwise-and val #x07))
+     (set-box! (apu-pulse1-sweep-reload-box ap) #t)]
 
     [(#x4002)
      ;; Timer low 8 bits
@@ -290,7 +380,10 @@
      ;; Load length counter if channel enabled
      (when (unbox (apu-pulse1-enable-box ap))
        (set-box! (apu-pulse1-length-box ap)
-                 (vector-ref LENGTH-TABLE (arithmetic-shift val -3))))]
+                 (vector-ref LENGTH-TABLE (arithmetic-shift val -3))))
+     ;; Restart envelope and reset sequence
+     (set-box! (apu-pulse1-envelope-start-box ap) #t)
+     (set-box! (apu-pulse1-sequence-pos-box ap) 0)]
 
     ;; ---- Pulse 2 ($4004-$4007) ----
     [(#x4004)
@@ -303,7 +396,8 @@
      (set-box! (apu-pulse2-sweep-enable-box ap) (bit? val 7))
      (set-box! (apu-pulse2-sweep-period-box ap) (extract val 4 3))
      (set-box! (apu-pulse2-sweep-negate-box ap) (bit? val 3))
-     (set-box! (apu-pulse2-sweep-shift-box ap) (bitwise-and val #x07))]
+     (set-box! (apu-pulse2-sweep-shift-box ap) (bitwise-and val #x07))
+     (set-box! (apu-pulse2-sweep-reload-box ap) #t)]
 
     [(#x4006)
      (set-box! (apu-pulse2-timer-box ap)
@@ -318,7 +412,10 @@
                 (arithmetic-shift (bitwise-and val #x07) 8)))
      (when (unbox (apu-pulse2-enable-box ap))
        (set-box! (apu-pulse2-length-box ap)
-                 (vector-ref LENGTH-TABLE (arithmetic-shift val -3))))]
+                 (vector-ref LENGTH-TABLE (arithmetic-shift val -3))))
+     ;; Restart envelope and reset sequence
+     (set-box! (apu-pulse2-envelope-start-box ap) #t)
+     (set-box! (apu-pulse2-sequence-pos-box ap) 0)]
 
     ;; ---- Triangle ($4008-$400B) ----
     [(#x4008)
@@ -363,7 +460,9 @@
     [(#x400F)
      (when (unbox (apu-noise-enable-box ap))
        (set-box! (apu-noise-length-box ap)
-                 (vector-ref LENGTH-TABLE (arithmetic-shift val -3))))]
+                 (vector-ref LENGTH-TABLE (arithmetic-shift val -3))))
+     ;; Restart envelope
+     (set-box! (apu-noise-envelope-start-box ap) #t)]
 
     ;; ---- DMC ($4010-$4013) ----
     [(#x4010)
@@ -464,8 +563,50 @@
   (unless (unbox (apu-tri-control-box ap))
     (set-box! (apu-tri-linear-reload-box ap) #f))
 
-  ;; TODO: Clock envelopes for pulse and noise channels
-  )
+  ;; Clock pulse 1 envelope
+  (clock-envelope! (apu-pulse1-envelope-start-box ap)
+                   (apu-pulse1-envelope-decay-box ap)
+                   (apu-pulse1-envelope-divider-box ap)
+                   (apu-pulse1-volume-box ap)
+                   (apu-pulse1-halt-box ap))  ; halt = loop
+
+  ;; Clock pulse 2 envelope
+  (clock-envelope! (apu-pulse2-envelope-start-box ap)
+                   (apu-pulse2-envelope-decay-box ap)
+                   (apu-pulse2-envelope-divider-box ap)
+                   (apu-pulse2-volume-box ap)
+                   (apu-pulse2-halt-box ap))
+
+  ;; Clock noise envelope
+  (clock-envelope! (apu-noise-envelope-start-box ap)
+                   (apu-noise-envelope-decay-box ap)
+                   (apu-noise-envelope-divider-box ap)
+                   (apu-noise-volume-box ap)
+                   (apu-noise-halt-box ap)))
+
+;; Clock an envelope unit
+(define (clock-envelope! start-box decay-box divider-box volume-box loop-box)
+  (cond
+    [(unbox start-box)
+     ;; Start envelope
+     (set-box! start-box #f)
+     (set-box! decay-box 15)
+     (set-box! divider-box (unbox volume-box))]
+    [else
+     ;; Clock divider
+     (let ([divider (unbox divider-box)])
+       (if (= divider 0)
+           (let ([decay (unbox decay-box)])
+             ;; Reload divider
+             (set-box! divider-box (unbox volume-box))
+             ;; Clock decay
+             (if (> decay 0)
+                 (set-box! decay-box (sub1 decay))
+                 ;; Loop?
+                 (when (unbox loop-box)
+                   (set-box! decay-box 15))))
+           ;; Decrement divider
+           (set-box! divider-box (sub1 divider))))]))
 
 ;; Half frame: clock length counters and sweep units
 (define (clock-half-frame! ap)
@@ -494,8 +635,63 @@
     (set-box! (apu-noise-length-box ap)
               (sub1 (unbox (apu-noise-length-box ap)))))
 
-  ;; TODO: Clock sweep units
-  )
+  ;; Clock sweep units
+  (clock-sweep! (apu-pulse1-sweep-enable-box ap)
+                (apu-pulse1-sweep-period-box ap)
+                (apu-pulse1-sweep-negate-box ap)
+                (apu-pulse1-sweep-shift-box ap)
+                (apu-pulse1-sweep-divider-box ap)
+                (apu-pulse1-sweep-reload-box ap)
+                (apu-pulse1-timer-box ap)
+                0)  ; Channel 0 = pulse 1
+
+  (clock-sweep! (apu-pulse2-sweep-enable-box ap)
+                (apu-pulse2-sweep-period-box ap)
+                (apu-pulse2-sweep-negate-box ap)
+                (apu-pulse2-sweep-shift-box ap)
+                (apu-pulse2-sweep-divider-box ap)
+                (apu-pulse2-sweep-reload-box ap)
+                (apu-pulse2-timer-box ap)
+                1)) ; Channel 1 = pulse 2
+
+;; Clock a sweep unit
+(define (clock-sweep! enable-box period-box negate-box shift-box
+                      divider-box reload-box timer-box channel-num)
+  (define divider (unbox divider-box))
+  (define period (unbox timer-box))
+  (define shift (unbox shift-box))
+
+  ;; Calculate target period
+  (define change-amount (arithmetic-shift period (- shift)))
+  (define target
+    (if (unbox negate-box)
+        ;; Pulse 1 uses one's complement, pulse 2 uses two's complement
+        (- period change-amount (if (= channel-num 0) 1 0))
+        (+ period change-amount)))
+
+  ;; Clock the sweep
+  (cond
+    [(unbox reload-box)
+     ;; Reload divider
+     (set-box! divider-box (unbox period-box))
+     (set-box! reload-box #f)
+     ;; Also update period if conditions are met
+     (when (and (= divider 0)
+                (unbox enable-box)
+                (> shift 0)
+                (>= period 8)
+                (<= target #x7FF))
+       (set-box! timer-box target))]
+    [(= divider 0)
+     ;; Update period if conditions are met
+     (set-box! divider-box (unbox period-box))
+     (when (and (unbox enable-box)
+                (> shift 0)
+                (>= period 8)
+                (<= target #x7FF))
+       (set-box! timer-box target))]
+    [else
+     (set-box! divider-box (sub1 divider))]))
 
 ;; ============================================================================
 ;; DMC Tick (sample playback and DMA)
@@ -589,6 +785,60 @@
   stall-cycles)
 
 ;; ============================================================================
+;; Channel Timer Ticking
+;; ============================================================================
+
+;; Tick a pulse channel timer (called at CPU/2 rate)
+(define (tick-pulse! timer-period-box timer-counter-box sequence-pos-box)
+  (define counter (unbox timer-counter-box))
+  (if (= counter 0)
+      (begin
+        ;; Reload timer and advance sequence (backwards)
+        (set-box! timer-counter-box (unbox timer-period-box))
+        (set-box! sequence-pos-box
+                  (bitwise-and (sub1 (unbox sequence-pos-box)) 7)))
+      ;; Decrement counter
+      (set-box! timer-counter-box (sub1 counter))))
+
+;; Tick the triangle channel timer (called at CPU rate)
+(define (tick-triangle! ap)
+  ;; Only tick if length counter and linear counter are nonzero
+  (when (and (> (unbox (apu-tri-length-box ap)) 0)
+             (> (unbox (apu-tri-linear-counter-box ap)) 0))
+    (define counter (unbox (apu-tri-timer-counter-box ap)))
+    (if (= counter 0)
+        (begin
+          ;; Reload timer and advance sequence
+          (set-box! (apu-tri-timer-counter-box ap) (unbox (apu-tri-timer-box ap)))
+          (set-box! (apu-tri-sequence-pos-box ap)
+                    (bitwise-and (add1 (unbox (apu-tri-sequence-pos-box ap))) 31)))
+        ;; Decrement counter
+        (set-box! (apu-tri-timer-counter-box ap) (sub1 counter)))))
+
+;; Tick the noise channel timer (called at CPU/2 rate)
+(define (tick-noise! ap)
+  (define counter (unbox (apu-noise-timer-counter-box ap)))
+  (if (= counter 0)
+      ;; Timer expired - clock LFSR
+      (let* ([sr (unbox (apu-noise-shift-register-box ap))]
+             ;; Feedback bit: XOR of bit 0 and bit 6 (mode 1) or bit 1 (mode 0)
+             [feedback-bit
+              (if (unbox (apu-noise-mode-box ap))
+                  (bitwise-xor (bitwise-and sr 1)
+                               (bitwise-and (arithmetic-shift sr -6) 1))
+                  (bitwise-xor (bitwise-and sr 1)
+                               (bitwise-and (arithmetic-shift sr -1) 1)))])
+        ;; Reload timer from period table
+        (set-box! (apu-noise-timer-counter-box ap)
+                  (vector-ref NOISE-PERIOD-TABLE (unbox (apu-noise-period-box ap))))
+        ;; Shift right and set bit 14 to feedback
+        (set-box! (apu-noise-shift-register-box ap)
+                  (bitwise-ior (arithmetic-shift sr -1)
+                               (arithmetic-shift feedback-bit 14))))
+      ;; Decrement counter
+      (set-box! (apu-noise-timer-counter-box ap) (sub1 counter))))
+
+;; ============================================================================
 ;; APU Tick (called each CPU cycle)
 ;; ============================================================================
 
@@ -600,8 +850,22 @@
 
   ;; Process each cycle
   (for ([_ (in-range cycles)])
-    (set-box! (apu-cycle-count-box ap)
-              (add1 (unbox (apu-cycle-count-box ap))))
+    (define cycle-count (unbox (apu-cycle-count-box ap)))
+    (set-box! (apu-cycle-count-box ap) (add1 cycle-count))
+
+    ;; Tick channel timers
+    ;; Triangle runs at CPU rate
+    (tick-triangle! ap)
+
+    ;; Pulse and noise run at CPU/2 rate (even cycles only)
+    (when (even? cycle-count)
+      (tick-pulse! (apu-pulse1-timer-box ap)
+                   (apu-pulse1-timer-counter-box ap)
+                   (apu-pulse1-sequence-pos-box ap))
+      (tick-pulse! (apu-pulse2-timer-box ap)
+                   (apu-pulse2-timer-counter-box ap)
+                   (apu-pulse2-sequence-pos-box ap))
+      (tick-noise! ap))
 
     ;; Tick DMC (may accumulate stall cycles)
     (dmc-tick! ap)
@@ -700,6 +964,105 @@
 ;; Set the memory reader callback for DMC sample fetches
 (define (apu-set-memory-reader! ap reader)
   (set-box! (apu-memory-reader-box ap) reader))
+
+;; ============================================================================
+;; Audio Output
+;; ============================================================================
+
+;; Calculate pulse channel output (0-15)
+;; Handles muting conditions: length=0, timer<8, sweep overflow
+(define (pulse-output ap duty-box timer-box length-box enable-box
+                      const-vol-box volume-box envelope-decay-box
+                      sequence-pos-box sweep-negate-box sweep-shift-box
+                      channel-num)
+  (define length (unbox length-box))
+  (define timer (unbox timer-box))
+  (define enabled (unbox enable-box))
+
+  (cond
+    ;; Muted if disabled, length=0, or timer<8
+    [(or (not enabled) (= length 0) (< timer 8)) 0]
+    ;; Check sweep muting (target period > $7FF)
+    [(let* ([shift (unbox sweep-shift-box)]
+            [change (arithmetic-shift timer (- shift))]
+            [target (if (unbox sweep-negate-box)
+                        (- timer change (if (= channel-num 0) 1 0))
+                        (+ timer change))])
+       (> target #x7FF))
+     0]
+    ;; Output based on duty cycle and envelope
+    [else
+     (define duty (unbox duty-box))
+     (define pos (unbox sequence-pos-box))
+     (define duty-seq (vector-ref DUTY-TABLE duty))
+     (if (= (vector-ref duty-seq pos) 0)
+         0
+         (if (unbox const-vol-box)
+             (unbox volume-box)
+             (unbox envelope-decay-box)))]))
+
+;; Get pulse 1 output (0-15)
+(define (apu-pulse1-output ap)
+  (pulse-output ap
+                (apu-pulse1-duty-box ap)
+                (apu-pulse1-timer-box ap)
+                (apu-pulse1-length-box ap)
+                (apu-pulse1-enable-box ap)
+                (apu-pulse1-const-vol-box ap)
+                (apu-pulse1-volume-box ap)
+                (apu-pulse1-envelope-decay-box ap)
+                (apu-pulse1-sequence-pos-box ap)
+                (apu-pulse1-sweep-negate-box ap)
+                (apu-pulse1-sweep-shift-box ap)
+                0))
+
+;; Get pulse 2 output (0-15)
+(define (apu-pulse2-output ap)
+  (pulse-output ap
+                (apu-pulse2-duty-box ap)
+                (apu-pulse2-timer-box ap)
+                (apu-pulse2-length-box ap)
+                (apu-pulse2-enable-box ap)
+                (apu-pulse2-const-vol-box ap)
+                (apu-pulse2-volume-box ap)
+                (apu-pulse2-envelope-decay-box ap)
+                (apu-pulse2-sequence-pos-box ap)
+                (apu-pulse2-sweep-negate-box ap)
+                (apu-pulse2-sweep-shift-box ap)
+                1))
+
+;; Get triangle output (0-15)
+(define (apu-triangle-output ap)
+  (cond
+    [(not (unbox (apu-tri-enable-box ap))) 0]
+    [(= (unbox (apu-tri-length-box ap)) 0) 0]
+    [(= (unbox (apu-tri-linear-counter-box ap)) 0) 0]
+    [else
+     (vector-ref TRIANGLE-SEQUENCE (unbox (apu-tri-sequence-pos-box ap)))]))
+
+;; Get noise output (0-15)
+(define (apu-noise-output ap)
+  (cond
+    [(not (unbox (apu-noise-enable-box ap))) 0]
+    [(= (unbox (apu-noise-length-box ap)) 0) 0]
+    ;; Output is 0 if bit 0 of shift register is 1
+    [(bit? (unbox (apu-noise-shift-register-box ap)) 0) 0]
+    [else
+     (if (unbox (apu-noise-const-vol-box ap))
+         (unbox (apu-noise-volume-box ap))
+         (unbox (apu-noise-envelope-decay-box ap)))]))
+
+;; Get DMC output (0-127)
+(define (apu-dmc-output ap)
+  (unbox (apu-dmc-output-box ap)))
+
+;; Get mixed audio output (0.0 to 1.0)
+(define (apu-output ap)
+  (mix-channels (apu-pulse1-output ap)
+                (apu-pulse2-output ap)
+                (apu-triangle-output ap)
+                (apu-noise-output ap)
+                (apu-dmc-output ap)))
 
 ;; ============================================================================
 ;; Module Tests

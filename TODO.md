@@ -407,21 +407,21 @@ Start simple: render a single nametable without scrolling.
 
 ### 14.1 Channels (`nes/apu/channels.rkt`)
 
-* [ ] Pulse: duty/envelope/sweep
-* [ ] Triangle: linear counter
-* [ ] Noise: LFSR
-* [ ] DMC: delta modulation output
+* [x] Pulse: duty/envelope/sweep
+* [x] Triangle: linear counter
+* [x] Noise: LFSR
+* [x] DMC: delta modulation output
 
 ### 14.2 Mixing (`nes/apu/mixer.rkt`)
 
-* [ ] Implement NES mixing formula (document)
+* [x] Implement NES mixing formula (document)
 * [ ] Optional filters (document)
 
 ### 14.3 SDL audio (`frontend/audio.rkt`)
 
-* [ ] Choose device sample rate
-* [ ] Implement resampling from APU tick rate to device
-* [ ] Implement buffering (ring buffer) + drift correction vs video pacing
+* [x] Choose device sample rate
+* [x] Implement resampling from APU tick rate to device
+* [x] Implement buffering (ring buffer) + drift correction vs video pacing
 * [ ] (T) Audio smoke test: generate tone/known pattern without crackle
 
 ---
