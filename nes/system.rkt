@@ -315,84 +315,86 @@
     (define cycle (ppu-cycle p))
     (define scanline (ppu-scanline p))
 
-    ;; VBlank start: scanline 241, cycle 1
-    (when (and (= scanline SCANLINE-VBLANK-START)
-               (= cycle 1))
-      (set-ppu-nmi-occurred! p #t)
-      ;; Trigger NMI if enabled
-      (when (ppu-ctrl-flag? p CTRL-NMI-ENABLE)
-        (set-ppu-nmi-output! p #t)
-        (set-box! (nes-nmi-pending-box sys) #t)))
-
-    ;; Pre-render scanline (261): clear flags at cycle 1
-    (when (and (= scanline SCANLINE-PRE-RENDER)
-               (= cycle 1))
-      (set-ppu-nmi-occurred! p #f)
-      (set-ppu-nmi-output! p #f)
-      (set-ppu-sprite0-hit! p #f)
-      (set-ppu-sprite-overflow! p #f))
-
-    ;; During pre-render (scanline 261), copy vertical scroll bits from t to v
-    ;; This happens at cycles 280-304 when rendering is enabled
-    (when (and (= scanline SCANLINE-PRE-RENDER)
-               (>= cycle 280)
-               (<= cycle 304)
-               (ppu-rendering-enabled? p))
-      ;; Copy vertical bits: fine Y, coarse Y, and Y nametable bit
-      ;; v: yyy NN YYYYY XXXXX
-      ;;    |||  | |||||
-      ;;    t: yyy NN YYYYY .....
-      (define v (ppu-v p))
-      (define t (ppu-t p))
-      ;; Mask: bits 5-14 (Y parts) + bit 11 (vertical nametable)
-      ;; = #b111_10_11111_00000 = #x7BE0
-      (define new-v (bitwise-ior (bitwise-and v #x041F)    ; Keep X bits from v
-                                 (bitwise-and t #x7BE0)))  ; Get Y bits from t
-      (set-ppu-v! p new-v))
-
-    ;; At dot 257, copy horizontal scroll bits from t to v (end of visible line)
-    (when (and (or (< scanline VISIBLE-HEIGHT)             ; Visible scanlines
-                   (= scanline SCANLINE-PRE-RENDER))       ; Or pre-render
-               (= cycle 257)
-               (ppu-rendering-enabled? p))
-      ;; Copy horizontal bits: coarse X and X nametable bit
-      (define v (ppu-v p))
-      (define t (ppu-t p))
-      ;; Mask: bits 0-4 (coarse X) + bit 10 (horizontal nametable)
-      ;; = #b000_01_00000_11111 = #x041F
-      (define new-v (bitwise-ior (bitwise-and v #x7BE0)    ; Keep Y bits from v
-                                 (bitwise-and t #x041F)))  ; Get X bits from t
-      (set-ppu-v! p new-v))
-
-    ;; Capture scroll state at cycle 0 of each visible scanline
-    ;; This is used by the renderer to get the correct scroll for each line
-    (when (and (< scanline VISIBLE-HEIGHT)
-               (= cycle 0)
-               (ppu-rendering-enabled? p))
-      (ppu-capture-scanline-scroll! p scanline))
-
-    ;; Sprite 0 hit detection during visible scanlines
-    ;; Check on cycles 1-255 (cycle corresponds to X position - 1)
-    ;; Only check if not already hit (it latches until pre-render clears it)
-    (when (and (< scanline VISIBLE-HEIGHT)  ; Visible scanlines 0-239
-               (>= cycle 1)
-               (<= cycle 255)               ; Visible pixels (X = cycle - 1)
-               (not (ppu-sprite0-hit? p)))  ; Not already hit
-      (define x (- cycle 1))  ; X position is cycle - 1
-      (when (check-sprite0-hit? p pbus scanline x)
-        (set-ppu-sprite0-hit! p #t)))
-
     ;; Odd frame cycle skip: on pre-render scanline, cycle 0, if rendering
-    ;; is enabled and this is an odd frame, skip cycle 0 (go directly to 1)
+    ;; is enabled and this is an odd frame, skip cycle 0 entirely.
+    ;; This means we don't process cycle 0 at all - just advance to cycle 1.
     ;; Reference: https://www.nesdev.org/wiki/PPU_frame_timing
-    (define skip-cycle?
+    (define skip-this-cycle?
       (and (= scanline SCANLINE-PRE-RENDER)
            (= cycle 0)
            (ppu-odd-frame? p)
            (ppu-rendering-enabled? p)))
 
-    ;; Advance position
-    (define next-cycle (+ cycle (if skip-cycle? 2 1)))
+    (unless skip-this-cycle?
+      ;; VBlank start: scanline 241, cycle 1
+      (when (and (= scanline SCANLINE-VBLANK-START)
+                 (= cycle 1))
+        (set-ppu-nmi-occurred! p #t)
+        ;; Trigger NMI if enabled
+        (when (ppu-ctrl-flag? p CTRL-NMI-ENABLE)
+          (set-ppu-nmi-output! p #t)
+          (set-box! (nes-nmi-pending-box sys) #t)))
+
+      ;; Pre-render scanline (261): clear flags at cycle 1
+      (when (and (= scanline SCANLINE-PRE-RENDER)
+                 (= cycle 1))
+        (set-ppu-nmi-occurred! p #f)
+        (set-ppu-nmi-output! p #f)
+        (set-ppu-sprite0-hit! p #f)
+        (set-ppu-sprite-overflow! p #f))
+
+      ;; During pre-render (scanline 261), copy vertical scroll bits from t to v
+      ;; This happens at cycles 280-304 when rendering is enabled
+      (when (and (= scanline SCANLINE-PRE-RENDER)
+                 (>= cycle 280)
+                 (<= cycle 304)
+                 (ppu-rendering-enabled? p))
+        ;; Copy vertical bits: fine Y, coarse Y, and Y nametable bit
+        ;; v: yyy NN YYYYY XXXXX
+        ;;    |||  | |||||
+        ;;    t: yyy NN YYYYY .....
+        (define v (ppu-v p))
+        (define t (ppu-t p))
+        ;; Mask: bits 5-14 (Y parts) + bit 11 (vertical nametable)
+        ;; = #b111_10_11111_00000 = #x7BE0
+        (define new-v (bitwise-ior (bitwise-and v #x041F)    ; Keep X bits from v
+                                   (bitwise-and t #x7BE0)))  ; Get Y bits from t
+        (set-ppu-v! p new-v))
+
+      ;; At dot 257, copy horizontal scroll bits from t to v (end of visible line)
+      (when (and (or (< scanline VISIBLE-HEIGHT)             ; Visible scanlines
+                     (= scanline SCANLINE-PRE-RENDER))       ; Or pre-render
+                 (= cycle 257)
+                 (ppu-rendering-enabled? p))
+        ;; Copy horizontal bits: coarse X and X nametable bit
+        (define v (ppu-v p))
+        (define t (ppu-t p))
+        ;; Mask: bits 0-4 (coarse X) + bit 10 (horizontal nametable)
+        ;; = #b000_01_00000_11111 = #x041F
+        (define new-v (bitwise-ior (bitwise-and v #x7BE0)    ; Keep Y bits from v
+                                   (bitwise-and t #x041F)))  ; Get X bits from t
+        (set-ppu-v! p new-v))
+
+      ;; Capture scroll state at cycle 0 of each visible scanline
+      ;; This is used by the renderer to get the correct scroll for each line
+      (when (and (< scanline VISIBLE-HEIGHT)
+                 (= cycle 0)
+                 (ppu-rendering-enabled? p))
+        (ppu-capture-scanline-scroll! p scanline))
+
+      ;; Sprite 0 hit detection during visible scanlines
+      ;; Check on cycles 1-255 (cycle corresponds to X position - 1)
+      ;; Only check if not already hit (it latches until pre-render clears it)
+      (when (and (< scanline VISIBLE-HEIGHT)  ; Visible scanlines 0-239
+                 (>= cycle 1)
+                 (<= cycle 255)               ; Visible pixels (X = cycle - 1)
+                 (not (ppu-sprite0-hit? p)))  ; Not already hit
+        (define x (- cycle 1))  ; X position is cycle - 1
+        (when (check-sprite0-hit? p pbus scanline x)
+          (set-ppu-sprite0-hit! p #t))))
+
+    ;; Advance position (always advance by 1, skip is handled by skipping logic)
+    (define next-cycle (+ cycle 1))
     (cond
       [(>= next-cycle CYCLES-PER-SCANLINE)
        ;; End of scanline
