@@ -41,6 +41,9 @@ Run 8 essential tests to catch obvious regressions:
 
 ```bash
 ./test/scripts/test-quick.sh
+
+# Run in parallel for ~4x speedup
+./test/scripts/test-quick.sh -j
 ```
 
 ### Full Test Suite by Category

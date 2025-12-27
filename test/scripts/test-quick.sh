@@ -4,28 +4,34 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-common.sh"
+parse_test_args "$@"
 
 echo "========================================"
 echo "Quick Smoke Test Suite"
+if [[ "$PARALLEL" == "1" ]]; then
+    echo "(running in parallel with $MAX_JOBS jobs)"
+fi
 echo "========================================"
 echo ""
 
 # Essential CPU tests
 echo "--- CPU Basics ---"
-run_test "$TEST_ROMS/instr_test-v5/rom_singles/01-basics.nes" 2000 "CPU basics"
-run_test "$TEST_ROMS/instr_test-v5/rom_singles/15-brk.nes" 2000 "BRK instruction"
-run_test "$TEST_ROMS/instr_test-v5/rom_singles/16-special.nes" 2000 "Special ops"
+smart_test "$TEST_ROMS/instr_test-v5/rom_singles/01-basics.nes" 2000 "CPU basics"
+smart_test "$TEST_ROMS/instr_test-v5/rom_singles/15-brk.nes" 2000 "BRK instruction"
+smart_test "$TEST_ROMS/instr_test-v5/rom_singles/16-special.nes" 2000 "Special ops"
 
 echo ""
 echo "--- PPU Basics ---"
-run_test "$TEST_ROMS/ppu_vbl_nmi/rom_singles/01-vbl_basics.nes" 1500 "VBlank basics"
-run_test "$TEST_ROMS/ppu_vbl_nmi/rom_singles/04-nmi_control.nes" 1500 "NMI control"
-run_test "$TEST_ROMS/sprite_hit_tests_2005.10.05/01.basics.nes" 2000 "Sprite 0 basics"
+smart_test "$TEST_ROMS/ppu_vbl_nmi/rom_singles/01-vbl_basics.nes" 1500 "VBlank basics"
+smart_test "$TEST_ROMS/ppu_vbl_nmi/rom_singles/04-nmi_control.nes" 1500 "NMI control"
+smart_test "$TEST_ROMS/sprite_hit_tests_2005.10.05/01.basics.nes" 2000 "Sprite 0 basics"
 
 echo ""
 echo "--- APU Basics ---"
-run_test "$TEST_ROMS/apu_test/rom_singles/1-len_ctr.nes" 3000 "Length counter"
-run_test "$TEST_ROMS/apu_test/rom_singles/2-len_table.nes" 3000 "Length table"
+smart_test "$TEST_ROMS/apu_test/rom_singles/1-len_ctr.nes" 3000 "Length counter"
+smart_test "$TEST_ROMS/apu_test/rom_singles/2-len_table.nes" 3000 "Length table"
+
+finish_tests
 
 print_summary "Quick Smoke Test"
 

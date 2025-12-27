@@ -1,17 +1,33 @@
 #!/bin/bash
 # Master test runner - runs all test categories
+# Supports parallel execution with -j flag
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Parse args and export for child scripts
+export PARALLEL=0
+export MAX_JOBS=8
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -j|--parallel)
+            PARALLEL=1
+            if [[ -n "$2" && "$2" =~ ^[0-9]+$ ]]; then
+                MAX_JOBS=$2
+                shift
+            fi
+            ;;
+    esac
+    shift
+done
+
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║           NES Emulator Comprehensive Test Suite              ║"
+if [[ "$PARALLEL" == "1" ]]; then
+echo "║                (parallel mode: $MAX_JOBS jobs)                       ║"
+fi
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
-
-# Track overall results
-TOTAL_PASSED=0
-TOTAL_FAILED=0
-TOTAL_INCONCLUSIVE=0
 
 run_category() {
     local script="$1"
@@ -22,11 +38,7 @@ run_category() {
     echo "│ $name"
     echo "└──────────────────────────────────────────────────────────────┘"
 
-    if [[ -x "$script" ]]; then
-        "$script"
-    else
-        bash "$script"
-    fi
+    bash "$script"
 }
 
 # Run each test category

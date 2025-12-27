@@ -3,14 +3,19 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-common.sh"
+parse_test_args "$@"
 
 echo "========================================"
 echo "PPU VBlank/NMI Tests"
+if [[ "$PARALLEL" == "1" ]]; then
+    echo "(running in parallel with $MAX_JOBS jobs)"
+fi
 echo "========================================"
 
 for rom in "$TEST_ROMS/ppu_vbl_nmi/rom_singles"/*.nes; do
-    run_test "$rom" 1500
+    smart_test "$rom" 1500
 done
+finish_tests
 
 print_summary "VBlank/NMI"
 VBL_PASSED=$PASSED
@@ -23,8 +28,9 @@ echo "Sprite 0 Hit Tests"
 echo "========================================"
 
 for rom in "$TEST_ROMS/sprite_hit_tests_2005.10.05"/*.nes; do
-    run_test "$rom" 2000
+    smart_test "$rom" 2000
 done
+finish_tests
 
 print_summary "Sprite 0 Hit"
 SPR0_PASSED=$PASSED
@@ -37,8 +43,9 @@ echo "Sprite Overflow Tests"
 echo "========================================"
 
 for rom in "$TEST_ROMS/sprite_overflow_tests"/*.nes; do
-    run_test "$rom" 2000
+    smart_test "$rom" 2000
 done
+finish_tests
 
 print_summary "Sprite Overflow"
 OVF_PASSED=$PASSED
@@ -50,11 +57,12 @@ echo "========================================"
 echo "PPU Misc Tests (blargg 2005)"
 echo "========================================"
 
-run_test "$TEST_ROMS/blargg_ppu_tests_2005.09.15b/palette_ram.nes" 2000 "Palette RAM"
-run_test "$TEST_ROMS/blargg_ppu_tests_2005.09.15b/sprite_ram.nes" 2000 "Sprite RAM"
-run_test "$TEST_ROMS/blargg_ppu_tests_2005.09.15b/vram_access.nes" 2000 "VRAM access"
-run_test "$TEST_ROMS/blargg_ppu_tests_2005.09.15b/vbl_clear_time.nes" 2000 "VBL clear time"
-run_test "$TEST_ROMS/blargg_ppu_tests_2005.09.15b/power_up_palette.nes" 2000 "Power-up palette"
+smart_test "$TEST_ROMS/blargg_ppu_tests_2005.09.15b/palette_ram.nes" 2000 "Palette RAM"
+smart_test "$TEST_ROMS/blargg_ppu_tests_2005.09.15b/sprite_ram.nes" 2000 "Sprite RAM"
+smart_test "$TEST_ROMS/blargg_ppu_tests_2005.09.15b/vram_access.nes" 2000 "VRAM access"
+smart_test "$TEST_ROMS/blargg_ppu_tests_2005.09.15b/vbl_clear_time.nes" 2000 "VBL clear time"
+smart_test "$TEST_ROMS/blargg_ppu_tests_2005.09.15b/power_up_palette.nes" 2000 "Power-up palette"
+finish_tests
 
 print_summary "PPU Misc"
 MISC_PASSED=$PASSED

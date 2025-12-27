@@ -3,17 +3,22 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-common.sh"
+parse_test_args "$@"
 
 echo "========================================"
 echo "MMC1 Tests"
+if [[ "$PARALLEL" == "1" ]]; then
+    echo "(running in parallel with $MAX_JOBS jobs)"
+fi
 echo "========================================"
 
-run_test "$TEST_ROMS/MMC1_A12/mmc1_a12.nes" 3000 "MMC1 A12"
+smart_test "$TEST_ROMS/MMC1_A12/mmc1_a12.nes" 3000 "MMC1 A12"
 
 # Holy Diver Batman MMC1 test if available
 if [[ -f "$TEST_ROMS/holy_diver_batman/M1_P128K.nes" ]]; then
-    run_test "$TEST_ROMS/holy_diver_batman/M1_P128K.nes" 2000 "Holy Diver Batman (MMC1)"
+    smart_test "$TEST_ROMS/holy_diver_batman/M1_P128K.nes" 2000 "Holy Diver Batman (MMC1)"
 fi
+finish_tests
 
 print_summary "MMC1"
 MMC1_PASSED=$PASSED
@@ -26,8 +31,9 @@ echo "MMC3 Tests"
 echo "========================================"
 
 for rom in "$TEST_ROMS/mmc3_test"/*.nes; do
-    run_test "$rom" 3000
+    smart_test "$rom" 3000
 done
+finish_tests
 
 print_summary "MMC3"
 MMC3_PASSED=$PASSED
