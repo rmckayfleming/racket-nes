@@ -1,6 +1,7 @@
 #!/bin/bash
 # Quick smoke test - runs essential tests for fast iteration
 # Use this during development to catch obvious regressions
+# Only includes tests that use the Blargg $6000 protocol
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-common.sh"
@@ -16,20 +17,20 @@ echo ""
 
 # Essential CPU tests
 echo "--- CPU Basics ---"
-smart_test "$TEST_ROMS/instr_test-v5/rom_singles/01-basics.nes" 2000 "CPU basics"
-smart_test "$TEST_ROMS/instr_test-v5/rom_singles/15-brk.nes" 2000 "BRK instruction"
-smart_test "$TEST_ROMS/instr_test-v5/rom_singles/16-special.nes" 2000 "Special ops"
+smart_test "$TEST_ROMS/instr_test-v5/rom_singles/01-basics.nes" 3000 "CPU basics"
+smart_test "$TEST_ROMS/instr_test-v5/rom_singles/15-brk.nes" 3000 "BRK instruction"
+smart_test "$TEST_ROMS/instr_test-v5/rom_singles/16-special.nes" 3000 "Special ops"
 
 echo ""
 echo "--- PPU Basics ---"
-smart_test "$TEST_ROMS/ppu_vbl_nmi/rom_singles/01-vbl_basics.nes" 1500 "VBlank basics"
-smart_test "$TEST_ROMS/ppu_vbl_nmi/rom_singles/04-nmi_control.nes" 1500 "NMI control"
-smart_test "$TEST_ROMS/sprite_hit_tests_2005.10.05/01.basics.nes" 2000 "Sprite 0 basics"
+smart_test "$TEST_ROMS/ppu_vbl_nmi/rom_singles/01-vbl_basics.nes" 3000 "VBlank basics"
+smart_test "$TEST_ROMS/ppu_vbl_nmi/rom_singles/03-vbl_clear_time.nes" 3000 "VBL clear time"
 
 echo ""
 echo "--- APU Basics ---"
-smart_test "$TEST_ROMS/apu_test/rom_singles/1-len_ctr.nes" 3000 "Length counter"
-smart_test "$TEST_ROMS/apu_test/rom_singles/2-len_table.nes" 3000 "Length table"
+smart_test "$TEST_ROMS/apu_test/rom_singles/1-len_ctr.nes" 5000 "Length counter"
+smart_test "$TEST_ROMS/apu_test/rom_singles/2-len_table.nes" 5000 "Length table"
+smart_test "$TEST_ROMS/apu_test/rom_singles/3-irq_flag.nes" 5000 "IRQ flag"
 
 finish_tests
 

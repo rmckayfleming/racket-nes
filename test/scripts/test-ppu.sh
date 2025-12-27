@@ -1,5 +1,9 @@
 #!/bin/bash
 # PPU tests
+#
+# Note: Some older test ROMs (sprite_hit_tests_2005, sprite_overflow_tests,
+# blargg_ppu_tests_2005) don't use the Blargg $6000 protocol and require
+# visual inspection. They are excluded from this automated test suite.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-common.sh"
@@ -13,7 +17,7 @@ fi
 echo "========================================"
 
 for rom in "$TEST_ROMS/ppu_vbl_nmi/rom_singles"/*.nes; do
-    smart_test "$rom" 1500
+    smart_test "$rom" 3000
 done
 finish_tests
 
@@ -24,54 +28,9 @@ reset_counters
 
 echo ""
 echo "========================================"
-echo "Sprite 0 Hit Tests"
-echo "========================================"
-
-for rom in "$TEST_ROMS/sprite_hit_tests_2005.10.05"/*.nes; do
-    smart_test "$rom" 2000
-done
-finish_tests
-
-print_summary "Sprite 0 Hit"
-SPR0_PASSED=$PASSED
-SPR0_FAILED=$FAILED
-reset_counters
-
-echo ""
-echo "========================================"
-echo "Sprite Overflow Tests"
-echo "========================================"
-
-for rom in "$TEST_ROMS/sprite_overflow_tests"/*.nes; do
-    smart_test "$rom" 2000
-done
-finish_tests
-
-print_summary "Sprite Overflow"
-OVF_PASSED=$PASSED
-OVF_FAILED=$FAILED
-reset_counters
-
-echo ""
-echo "========================================"
-echo "PPU Misc Tests (blargg 2005)"
-echo "========================================"
-
-smart_test "$TEST_ROMS/blargg_ppu_tests_2005.09.15b/palette_ram.nes" 2000 "Palette RAM"
-smart_test "$TEST_ROMS/blargg_ppu_tests_2005.09.15b/sprite_ram.nes" 2000 "Sprite RAM"
-smart_test "$TEST_ROMS/blargg_ppu_tests_2005.09.15b/vram_access.nes" 2000 "VRAM access"
-smart_test "$TEST_ROMS/blargg_ppu_tests_2005.09.15b/vbl_clear_time.nes" 2000 "VBL clear time"
-smart_test "$TEST_ROMS/blargg_ppu_tests_2005.09.15b/power_up_palette.nes" 2000 "Power-up palette"
-finish_tests
-
-print_summary "PPU Misc"
-MISC_PASSED=$PASSED
-MISC_FAILED=$FAILED
-
-echo ""
-echo "========================================"
 echo "PPU Test Summary"
 echo "========================================"
-TOTAL_PASSED=$((VBL_PASSED + SPR0_PASSED + OVF_PASSED + MISC_PASSED))
-TOTAL_FAILED=$((VBL_FAILED + SPR0_FAILED + OVF_FAILED + MISC_FAILED))
-echo -e "Total: ${GREEN}$TOTAL_PASSED passed${NC}, ${RED}$TOTAL_FAILED failed${NC}"
+echo -e "Total: ${GREEN}$VBL_PASSED passed${NC}, ${RED}$VBL_FAILED failed${NC}"
+echo ""
+echo "Note: sprite_hit_tests_2005, sprite_overflow_tests, and"
+echo "blargg_ppu_tests_2005 require visual inspection (no \$6000 protocol)"

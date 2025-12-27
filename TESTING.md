@@ -46,17 +46,17 @@ Run 8 essential tests to catch obvious regressions:
 ./test/scripts/test-quick.sh -j
 ```
 
-### Full Test Suite by Category
+### Full Test Suite
 
 ```bash
-# All tests
-./test/scripts/test-all.sh
+# All tests (use -j for parallel execution)
+./test/scripts/test-all.sh -j
 
 # Individual categories
-./test/scripts/test-cpu.sh      # CPU instruction, timing, interrupt tests
-./test/scripts/test-ppu.sh      # VBlank/NMI, sprite 0, sprite overflow tests
-./test/scripts/test-apu.sh      # APU registers, DMC, reset behavior tests
-./test/scripts/test-mappers.sh  # MMC1, MMC3 mapper tests
+./test/scripts/test-cpu.sh -j
+./test/scripts/test-ppu.sh -j
+./test/scripts/test-apu.sh -j
+./test/scripts/test-mappers.sh -j
 ```
 
 ### Running Individual Tests
@@ -67,7 +67,7 @@ Use the CLI directly:
 PLTCOLLECTS="$PWD:" /opt/homebrew/bin/racket main.rkt \
     --rom test/roms/nes-test-roms/instr_test-v5/rom_singles/01-basics.nes \
     --headless \
-    --frames 3000 \
+    --frames 5000 \
     --test-addr 0x6000
 ```
 
@@ -94,23 +94,35 @@ Most test ROMs use the Blargg protocol:
 | `$6001-$6003` | Magic bytes `$DE $B0 $61` (validates test initialized) |
 | `$6004+` | Human-readable error message (null-terminated) |
 
+Tests that crash with an illegal opcode while status is still `$80` are treated as failures.
+
 ## Current Test Results
 
-*Last updated: 2024-12-27*
+*Last updated: 2025-12-27*
 
-### CPU Tests
+### Summary
+
+| Category | Passed | Failed |
+|----------|--------|--------|
+| CPU      | 5      | 22     |
+| PPU      | 2      | 8      |
+| APU      | 3      | 5      |
+| Mappers  | 1      | 5      |
+| **Total**| **11** | **40** |
+
+### CPU Tests (instr_test-v5)
 
 | Test | Status | Notes |
 |------|--------|-------|
 | 01-basics.nes | PASS | |
-| 02-implied.nes | INCONCLUSIVE | Needs more frames |
-| 03-immediate.nes | INCONCLUSIVE | Needs more frames |
-| 04-zero_page.nes | INCONCLUSIVE | Needs more frames |
-| 05-zp_xy.nes | INCONCLUSIVE | Needs more frames |
-| 06-absolute.nes | INCONCLUSIVE | Needs more frames |
-| 07-abs_xy.nes | INCONCLUSIVE | Needs more frames |
-| 08-ind_x.nes | INCONCLUSIVE | Needs more frames |
-| 09-ind_y.nes | INCONCLUSIVE | Needs more frames |
+| 02-implied.nes | FAIL | Crashes during test |
+| 03-immediate.nes | FAIL | Crashes during test |
+| 04-zero_page.nes | FAIL | Crashes during test |
+| 05-zp_xy.nes | FAIL | Crashes during test |
+| 06-absolute.nes | FAIL | Crashes during test |
+| 07-abs_xy.nes | FAIL | Crashes during test |
+| 08-ind_x.nes | FAIL | Crashes during test |
+| 09-ind_y.nes | FAIL | Crashes during test |
 | 10-branches.nes | FAIL | BCC instruction |
 | 11-stack.nes | FAIL | PHA instruction |
 | 12-jmp_jsr.nes | FAIL | JMP instruction |
@@ -119,9 +131,7 @@ Most test ROMs use the Blargg protocol:
 | 15-brk.nes | PASS | |
 | 16-special.nes | PASS | |
 
-**Summary: 3 passed, 5 failed, 8 inconclusive**
-
-### PPU Tests
+### PPU Tests (ppu_vbl_nmi)
 
 | Test | Status | Notes |
 |------|--------|-------|
@@ -135,12 +145,8 @@ Most test ROMs use the Blargg protocol:
 | 08-nmi_off_timing.nes | FAIL | |
 | 09-even_odd_frames.nes | FAIL | Odd frame skip timing |
 | 10-even_odd_timing.nes | FAIL | |
-| Sprite 0 hit (all) | INCONCLUSIVE | Need more frames |
-| Sprite overflow (all) | INCONCLUSIVE | Need more frames |
 
-**Summary: 2 passed, 8 failed, 21 inconclusive**
-
-### APU Tests
+### APU Tests (apu_test)
 
 | Test | Status | Notes |
 |------|--------|-------|
@@ -152,33 +158,47 @@ Most test ROMs use the Blargg protocol:
 | 6-irq_flag_timing.nes | FAIL | IRQ flag timing |
 | 7-dmc_basics.nes | FAIL | DMC buffer behavior |
 | 8-dmc_rates.nes | FAIL | DMC rate timing |
-| DMC tests (all) | INCONCLUSIVE | Need more frames |
-| APU reset (all) | FAIL | Reset behavior |
 
-**Summary: 3 passed, 11 failed, 4 inconclusive**
+### Mapper Tests (mmc3_test)
 
-### Overall Summary
+| Test | Status | Notes |
+|------|--------|-------|
+| 1-clocking.nes | FAIL | IRQ/A12 clocking |
+| 2-details.nes | FAIL | Counter reload |
+| 3-A12_clocking.nes | FAIL | A12 change detection |
+| 4-scanline_timing.nes | FAIL | Scanline 0 IRQ timing |
+| 5-MMC3.nes | FAIL | Reload behavior |
+| 6-MMC6.nes | PASS | |
 
-| Category | Passed | Failed | Inconclusive |
-|----------|--------|--------|--------------|
-| CPU | 3 | 5 | 8 |
-| PPU | 2 | 8 | 21 |
-| APU | 3 | 11 | 4 |
-| **Total** | **8** | **24** | **33** |
+## Tests Requiring Visual Inspection
+
+Some older test ROMs don't use the Blargg `$6000` protocol and require visual inspection:
+
+- `sprite_hit_tests_2005` - Sprite 0 hit tests
+- `sprite_overflow_tests` - Sprite overflow tests
+- `blargg_ppu_tests_2005` - Palette RAM, sprite RAM, VRAM access
+- `branch_timing_tests` - Branch timing
+- `cpu_dummy_reads/writes` - Dummy read/write tests
+- `dmc_tests` - DMC tests
+- `apu_reset` - APU reset tests (require reset button)
+- `MMC1_A12` - MMC1 A12 test
 
 ## Known Issues
 
-1. **Branch/Stack instructions** — Tests 10-14 fail, suggesting issues with BCC, PHA, JMP, RTS, RTI
-2. **NMI timing** — NMI occurs one instruction too early
-3. **Odd frame skip** — Clock skip timing relative to BG enable is wrong
-4. **APU timing** — Frame IRQ and length counter timing off
-5. **DMC** — Buffer/rate implementation needs work
+1. **CPU addressing mode bugs** — Tests 02-09 crash, indicating bugs in implied/immediate/zero page/absolute/indirect addressing
+2. **Branch/Stack instructions** — Tests 10-14 fail (BCC, PHA, JMP, RTS, RTI)
+3. **NMI timing** — NMI occurs one instruction too early
+4. **Odd frame skip** — Clock skip timing relative to BG enable is wrong
+5. **APU timing** — Frame IRQ and length counter timing off
+6. **DMC** — Buffer/rate implementation needs work
+7. **MMC3 IRQ** — Scanline counter not working correctly
 
 ## Adding New Tests
 
-1. Add the test ROM to the appropriate script in `test/scripts/`
-2. Use the `run_test` function from `test-common.sh`:
+1. Ensure the test uses the Blargg `$6000` protocol
+2. Add the test ROM to the appropriate script in `test/scripts/`
+3. Use `smart_test` function from `test-common.sh`:
    ```bash
-   run_test "$TEST_ROMS/path/to/test.nes" 3000 "Test description"
+   smart_test "$TEST_ROMS/path/to/test.nes" 5000 "Test description"
    ```
-3. The second argument is the frame count (start with 3000, increase if inconclusive)
+4. The second argument is the frame count (start with 5000)

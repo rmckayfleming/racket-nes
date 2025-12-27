@@ -62,8 +62,9 @@
   (list->string chars))
 
 ;; Check Blargg-style test result at the given address
-;; Returns exit code: 0 = pass, non-zero = fail
-(define (check-test-result sys addr)
+;; Returns exit code: 0 = pass, 1 = fail, 2 = inconclusive
+;; halted-early? indicates if test hit illegal opcode before completion
+(define (check-test-result sys addr #:halted-early? [halted-early? #f])
   (define bus (nes-cpu-bus sys))
 
   (define status (bus-read bus addr))
@@ -89,9 +90,16 @@
 
     ;; Status $80 = still running
     [(= status #x80)
-     (printf "INCONCLUSIVE: Test still running (status=$80)\n")
-     (printf "  Try increasing --frames count.\n")
-     2]
+     (cond
+       [halted-early?
+        ;; Crashed during test - this is a failure, not inconclusive
+        (printf "FAIL: Test crashed (illegal opcode) before completion\n")
+        (printf "  Status was still $80 (running) when crash occurred.\n")
+        1]
+       [else
+        (printf "INCONCLUSIVE: Test still running (status=$80)\n")
+        (printf "  Try increasing --frames count.\n")
+        2])]
 
     ;; Any other status = failed
     [else
@@ -154,29 +162,45 @@
   (when (trace?)
     (nes-set-trace! sys #t))
 
-  (cond
-    [(step-limit)
-     ;; Run for N steps
-     (for ([_ (in-range (step-limit))])
-       (nes-step! sys))
-     (printf "Completed ~a steps.\n" (step-limit))]
+  ;; Wrap execution in exception handler to catch illegal opcodes
+  ;; (many test ROMs halt with illegal opcodes like $FF after completing)
+  (define halted-early #f)
 
-    [(frame-limit)
-     ;; Run for N frames
-     (for ([_ (in-range (frame-limit))])
-       (nes-run-frame! sys))
-     (printf "Completed ~a frames.\n" (frame-limit))]
+  (with-handlers ([exn:fail?
+                   (lambda (e)
+                     (define msg (exn-message e))
+                     (cond
+                       ;; Illegal opcode = test halt, check results
+                       [(string-contains? msg "illegal opcode")
+                        (set! halted-early #t)]
+                       ;; Re-raise other exceptions
+                       [else (raise e)]))])
+    (cond
+      [(step-limit)
+       ;; Run for N steps
+       (for ([_ (in-range (step-limit))])
+         (nes-step! sys))
+       (printf "Completed ~a steps.\n" (step-limit))]
 
-    [else
-     ;; Run forever (or until something stops it)
-     (printf "Running indefinitely (Ctrl+C to stop)...\n")
-     (let loop ()
-       (nes-step! sys)
-       (loop))])
+      [(frame-limit)
+       ;; Run for N frames
+       (for ([_ (in-range (frame-limit))])
+         (nes-run-frame! sys))
+       (printf "Completed ~a frames.\n" (frame-limit))]
+
+      [else
+       ;; Run forever (or until something stops it)
+       (printf "Running indefinitely (Ctrl+C to stop)...\n")
+       (let loop ()
+         (nes-step! sys)
+         (loop))]))
+
+  (when halted-early
+    (printf "Test halted (illegal opcode).\n"))
 
   ;; Check test result if --test-addr was specified
   (if (test-addr)
-      (check-test-result sys (test-addr))
+      (check-test-result sys (test-addr) #:halted-early? halted-early)
       0))
 
 ;; Run with video output

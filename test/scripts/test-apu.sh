@@ -1,5 +1,8 @@
 #!/bin/bash
 # APU tests
+#
+# Note: dmc_tests don't use Blargg $6000 protocol (visual only).
+# APU reset tests require actual reset button which we can't automate.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-common.sh"
@@ -13,7 +16,7 @@ fi
 echo "========================================"
 
 for rom in "$TEST_ROMS/apu_test/rom_singles"/*.nes; do
-    smart_test "$rom" 3000
+    smart_test "$rom" 5000
 done
 finish_tests
 
@@ -24,38 +27,8 @@ reset_counters
 
 echo ""
 echo "========================================"
-echo "DMC Tests"
-echo "========================================"
-
-smart_test "$TEST_ROMS/dmc_tests/buffer_retained.nes" 2000 "DMC buffer retained"
-smart_test "$TEST_ROMS/dmc_tests/latency.nes" 2000 "DMC latency"
-smart_test "$TEST_ROMS/dmc_tests/status.nes" 2000 "DMC status"
-smart_test "$TEST_ROMS/dmc_tests/status_irq.nes" 2000 "DMC status IRQ"
-finish_tests
-
-print_summary "DMC"
-DMC_PASSED=$PASSED
-DMC_FAILED=$FAILED
-reset_counters
-
-echo ""
-echo "========================================"
-echo "APU Reset Tests"
-echo "========================================"
-
-for rom in "$TEST_ROMS/apu_reset"/*.nes; do
-    smart_test "$rom" 2000
-done
-finish_tests
-
-print_summary "APU Reset"
-RESET_PASSED=$PASSED
-RESET_FAILED=$FAILED
-
-echo ""
-echo "========================================"
 echo "APU Test Summary"
 echo "========================================"
-TOTAL_PASSED=$((APU_PASSED + DMC_PASSED + RESET_PASSED))
-TOTAL_FAILED=$((APU_FAILED + DMC_FAILED + RESET_FAILED))
-echo -e "Total: ${GREEN}$TOTAL_PASSED passed${NC}, ${RED}$TOTAL_FAILED failed${NC}"
+echo -e "Total: ${GREEN}$APU_PASSED passed${NC}, ${RED}$APU_FAILED failed${NC}"
+echo ""
+echo "Note: dmc_tests and apu_reset require visual inspection or reset button"
