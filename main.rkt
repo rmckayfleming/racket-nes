@@ -13,11 +13,14 @@
 ;;   --trace              Enable CPU trace output
 ;;   --screenshot-out <path>  Save screenshot after running
 ;;   --scale <n>          Integer scale factor (default: 3)
+;;   --test-addr <hex>    Check Blargg test result at address (e.g. 0x6000)
+;;   --pc <hex>           Override initial PC (e.g. 0xC000 for nestest)
 
 (require racket/cmdline
          racket/match
          racket/format
          racket/file
+         racket/string
          "cart/ines.rkt"
          "nes/system.rkt"
          "nes/mappers/nrom.rkt"
@@ -27,7 +30,8 @@
          "nes/mappers/mapper.rkt"
          "nes/ppu/ppu.rkt"
          "nes/ppu/render.rkt"
-         "nes/input/controller.rkt")
+         "nes/input/controller.rkt"
+         "lib/bus.rkt")
 
 (define rom-path (make-parameter #f))
 (define headless? (make-parameter #f))
@@ -36,6 +40,67 @@
 (define trace? (make-parameter #f))
 (define screenshot-path (make-parameter #f))
 (define scale-factor (make-parameter 3))
+(define test-addr (make-parameter #f))
+(define initial-pc (make-parameter #f))
+
+;; Parse hex string like "0x6000" or "6000" or "$6000"
+(define (parse-hex str)
+  (define cleaned
+    (cond
+      [(string-prefix? str "0x") (substring str 2)]
+      [(string-prefix? str "0X") (substring str 2)]
+      [(string-prefix? str "$") (substring str 1)]
+      [else str]))
+  (string->number cleaned 16))
+
+;; Read null-terminated string from memory starting at addr
+(define (read-test-message bus addr)
+  (define chars
+    (for/list ([i (in-range 256)]  ; Max 256 chars
+               #:break (= (bus-read bus (+ addr i)) 0))
+      (integer->char (bus-read bus (+ addr i)))))
+  (list->string chars))
+
+;; Check Blargg-style test result at the given address
+;; Returns exit code: 0 = pass, non-zero = fail
+(define (check-test-result sys addr)
+  (define bus (nes-cpu-bus sys))
+
+  (define status (bus-read bus addr))
+  (define magic1 (bus-read bus (+ addr 1)))
+  (define magic2 (bus-read bus (+ addr 2)))
+  (define magic3 (bus-read bus (+ addr 3)))
+
+  (cond
+    ;; Check magic bytes: $DE $B0 $61
+    [(not (and (= magic1 #xDE) (= magic2 #xB0) (= magic3 #x61)))
+     (printf "INCONCLUSIVE: Magic bytes not found at $~a (got $~a $~a $~a)\n"
+             (number->string (+ addr 1) 16)
+             (number->string magic1 16)
+             (number->string magic2 16)
+             (number->string magic3 16))
+     (printf "  Test ROM may not have initialized or doesn't use Blargg protocol.\n")
+     2]
+
+    ;; Status $00 = passed
+    [(= status #x00)
+     (printf "PASS\n")
+     0]
+
+    ;; Status $80 = still running
+    [(= status #x80)
+     (printf "INCONCLUSIVE: Test still running (status=$80)\n")
+     (printf "  Try increasing --frames count.\n")
+     2]
+
+    ;; Any other status = failed
+    [else
+     (printf "FAIL: Status code $~a\n" (number->string status 16))
+     ;; Read and display error message from addr+4
+     (define msg (read-test-message bus (+ addr 4)))
+     (unless (string=? msg "")
+       (printf "  Message: ~a\n" msg))
+     1]))
 
 (define (parse-command-line)
   (command-line
@@ -61,7 +126,13 @@
                               (screenshot-path path)]
    [("--scale" "-S") n
                      "Integer scale factor (1-8, default: 3)"
-                     (scale-factor (string->number n))]))
+                     (scale-factor (string->number n))]
+   [("--test-addr" "-T") addr
+                         "Check Blargg test result at address (hex, e.g. 0x6000)"
+                         (test-addr (parse-hex addr))]
+   [("--pc" "-P") addr
+                  "Override initial PC (hex, e.g. 0xC000)"
+                  (initial-pc (parse-hex addr))]))
 
 ;; Create appropriate mapper for ROM
 (define (create-mapper rom)
@@ -76,6 +147,7 @@
      (make-nrom-mapper rom)]))
 
 ;; Run in headless mode (no video)
+;; Returns exit code (0 = success, non-zero = failure/inconclusive)
 (define (run-headless sys)
   (printf "Running in headless mode...\n")
 
@@ -100,7 +172,12 @@
      (printf "Running indefinitely (Ctrl+C to stop)...\n")
      (let loop ()
        (nes-step! sys)
-       (loop))]))
+       (loop))])
+
+  ;; Check test result if --test-addr was specified
+  (if (test-addr)
+      (check-test-result sys (test-addr))
+      0))
 
 ;; Run with video output
 (define (run-with-video sys)
@@ -252,6 +329,10 @@
   (printf "  Trace: ~a\n" (trace?))
   (when (screenshot-path)
     (printf "  Screenshot: ~a\n" (screenshot-path)))
+  (when (test-addr)
+    (printf "  Test addr: $~a\n" (number->string (test-addr) 16)))
+  (when (initial-pc)
+    (printf "  Initial PC: $~a\n" (number->string (initial-pc) 16)))
   (printf "\n")
 
   ;; Load ROM
@@ -272,15 +353,25 @@
   (printf "Creating system...\n")
   (define mapper (create-mapper rom))
   (define sys (make-nes mapper))
+
+  ;; Override PC if requested (e.g., for nestest automation mode)
+  (when (initial-pc)
+    (set-cpu-pc! (nes-cpu sys) (initial-pc)))
+
   (printf "  CPU PC: $~a\n" (number->string (cpu-pc (nes-cpu sys)) 16))
   (printf "\n")
 
-  ;; Run
-  (if (headless?)
-      (run-headless sys)
-      (run-with-video sys)))
+  ;; Run and get exit code
+  (define exit-code
+    (if (headless?)
+        (run-headless sys)
+        (begin (run-with-video sys) 0)))
 
-;; Need cpu-pc from cpu module
+  ;; Exit with appropriate code for test automation
+  (when (test-addr)
+    (exit exit-code)))
+
+;; Need cpu-pc and set-cpu-pc! from cpu module
 (require "lib/6502/cpu.rkt")
 
 (module+ main

@@ -25,6 +25,7 @@
  nes-cpu
  nes-ppu
  nes-ppu-bus
+ nes-cpu-bus  ; CPU memory bus for reading/writing
  nes-mapper
  nes-ram
  nes-controller1
@@ -206,6 +207,9 @@
 
 (define (nes-ram sys)
   (nes-memory-ram (nes-memory sys)))
+
+(define (nes-cpu-bus sys)
+  (nes-memory-bus (nes-memory sys)))
 
 (define (nes-frame-count sys)
   (unbox (nes-frame-count-box sys)))
