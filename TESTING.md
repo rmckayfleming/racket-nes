@@ -104,11 +104,11 @@ Tests that crash with an illegal opcode while status is still `$80` are treated 
 
 | Category | Passed | Failed |
 |----------|--------|--------|
-| CPU      | 13     | 14     |
+| CPU      | 16     | 0      |
 | PPU      | 2      | 8      |
 | APU      | 3      | 5      |
 | Mappers  | 1      | 5      |
-| **Total**| **19** | **32** |
+| **Total**| **22** | **18** |
 
 ### CPU Tests (instr_test-v5)
 
@@ -123,11 +123,11 @@ Tests that crash with an illegal opcode while status is still `$80` are treated 
 | 07-abs_xy.nes | PASS | |
 | 08-ind_x.nes | PASS | |
 | 09-ind_y.nes | PASS | |
-| 10-branches.nes | FAIL | BCC instruction |
-| 11-stack.nes | FAIL | PHA instruction |
-| 12-jmp_jsr.nes | FAIL | JMP instruction |
-| 13-rts.nes | FAIL | RTS instruction |
-| 14-rti.nes | FAIL | RTI instruction |
+| 10-branches.nes | PASS | |
+| 11-stack.nes | PASS | |
+| 12-jmp_jsr.nes | PASS | |
+| 13-rts.nes | PASS | |
+| 14-rti.nes | PASS | |
 | 15-brk.nes | PASS | |
 | 16-special.nes | PASS | |
 
@@ -185,12 +185,11 @@ Some older test ROMs don't use the Blargg `$6000` protocol and require visual in
 
 ## Known Issues
 
-1. **Branch/Stack instructions** — Tests 10-14 fail (BCC, PHA, JMP, RTS, RTI)
-2. **NMI timing** — NMI occurs one instruction too early
-3. **Odd frame skip** — Clock skip timing relative to BG enable is wrong
-4. **APU timing** — Frame IRQ and length counter timing off
-5. **DMC** — Buffer/rate implementation needs work
-6. **MMC3 IRQ** — Scanline counter not working correctly
+1. **NMI timing** — NMI occurs one instruction too early
+2. **Odd frame skip** — Clock skip timing relative to BG enable is wrong
+3. **APU timing** — Frame IRQ and length counter timing off
+4. **DMC** — Buffer/rate implementation needs work
+5. **MMC3 IRQ** — Scanline counter not working correctly
 
 ## Adding New Tests
 
