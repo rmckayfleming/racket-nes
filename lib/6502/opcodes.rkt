@@ -461,6 +461,329 @@
   (cpu-add-cycles! c 7))
 
 ;; ============================================================================
+;; Illegal/Unofficial Opcodes
+;; ============================================================================
+;; Reference: https://www.nesdev.org/undocumented_opcodes.txt
+
+;; --- Illegal NOPs (1-byte, implied mode) ---
+;; Opcodes: $1A, $3A, $5A, $7A, $DA, $FA
+(define (exec-nop-illegal c) (cpu-add-cycles! c 2))
+
+;; --- DOP (Double NOP / SKB - skip byte) ---
+;; 2-byte NOPs that read and discard an operand
+(define (exec-dop-imm c)
+  (set-cpu-pc! c (u16 (+ (cpu-pc c) 1)))  ; Skip 1 byte
+  (cpu-add-cycles! c 2))
+
+(define (exec-dop-zp c)
+  (set-cpu-pc! c (u16 (+ (cpu-pc c) 1)))  ; Skip 1 byte
+  (cpu-add-cycles! c 3))
+
+(define (exec-dop-zpx c)
+  (set-cpu-pc! c (u16 (+ (cpu-pc c) 1)))  ; Skip 1 byte
+  (cpu-add-cycles! c 4))
+
+;; --- TOP (Triple NOP / SKW - skip word) ---
+;; 3-byte NOPs that read and discard 2 operand bytes
+(define (exec-top-abs c)
+  (set-cpu-pc! c (u16 (+ (cpu-pc c) 2)))  ; Skip 2 bytes
+  (cpu-add-cycles! c 4))
+
+(define (exec-top-abx c)
+  ;; Also performs dummy read (page crossing adds cycle)
+  (define-values (addr crossed?) (get-address c addr-absolute-x))
+  (cpu-add-cycles! c (+ 4 (if crossed? 1 0))))
+
+;; --- LAX (Load A and X) ---
+(define (exec-lax c mode cycles)
+  (define-values (val crossed?) (read-operand c mode))
+  (set-cpu-a! c val)
+  (set-cpu-x! c val)
+  (cpu-update-nz! c val)
+  (cpu-add-cycles! c (+ cycles (if crossed? 1 0))))
+
+;; --- SAX/AAX (Store A AND X) ---
+(define (exec-sax c mode cycles)
+  (define-values (addr _) (get-address c mode))
+  (cpu-write c addr (bitwise-and (cpu-a c) (cpu-x c)))
+  (cpu-add-cycles! c cycles))
+
+;; --- DCP (Decrement then Compare) ---
+(define (exec-dcp c mode cycles)
+  (define-values (addr _) (get-address c mode))
+  (define val (u8 (- (cpu-read c addr) 1)))
+  (cpu-write c addr val)
+  (compare! c (cpu-a c) val)
+  (cpu-add-cycles! c cycles))
+
+;; --- ISC/ISB (Increment then Subtract) ---
+(define (exec-isc c mode cycles)
+  (define-values (addr _) (get-address c mode))
+  (define val (u8 (+ (cpu-read c addr) 1)))
+  (cpu-write c addr val)
+  ;; Now do SBC with the incremented value
+  (define a (cpu-a c))
+  (define borrow (if (cpu-flag? c flag-c) 0 1))
+  (define diff (- a val borrow))
+  (if (< diff 0)
+      (clear-cpu-flag! c flag-c)
+      (set-cpu-flag! c flag-c))
+  (define result (u8 diff))
+  (define not-val (u8 (bitwise-not val)))
+  (if (not (zero? (bitwise-and (bitwise-xor a result)
+                               (bitwise-and (bitwise-xor not-val result) #x80))))
+      (set-cpu-flag! c flag-v)
+      (clear-cpu-flag! c flag-v))
+  (set-cpu-a! c result)
+  (cpu-update-nz! c result)
+  (cpu-add-cycles! c cycles))
+
+;; --- SLO (ASL then ORA) ---
+(define (exec-slo c mode cycles)
+  (define-values (addr _) (get-address c mode))
+  (define val (cpu-read c addr))
+  ;; ASL
+  (if (bit? val 7)
+      (set-cpu-flag! c flag-c)
+      (clear-cpu-flag! c flag-c))
+  (define shifted (u8 (arithmetic-shift val 1)))
+  (cpu-write c addr shifted)
+  ;; ORA
+  (set-cpu-a! c (bitwise-ior (cpu-a c) shifted))
+  (cpu-update-nz! c (cpu-a c))
+  (cpu-add-cycles! c cycles))
+
+;; --- RLA (ROL then AND) ---
+(define (exec-rla c mode cycles)
+  (define-values (addr _) (get-address c mode))
+  (define val (cpu-read c addr))
+  (define carry-in (if (cpu-flag? c flag-c) 1 0))
+  ;; ROL
+  (if (bit? val 7)
+      (set-cpu-flag! c flag-c)
+      (clear-cpu-flag! c flag-c))
+  (define rotated (u8 (bitwise-ior (arithmetic-shift val 1) carry-in)))
+  (cpu-write c addr rotated)
+  ;; AND
+  (set-cpu-a! c (bitwise-and (cpu-a c) rotated))
+  (cpu-update-nz! c (cpu-a c))
+  (cpu-add-cycles! c cycles))
+
+;; --- SRE (LSR then EOR) ---
+(define (exec-sre c mode cycles)
+  (define-values (addr _) (get-address c mode))
+  (define val (cpu-read c addr))
+  ;; LSR
+  (if (bit? val 0)
+      (set-cpu-flag! c flag-c)
+      (clear-cpu-flag! c flag-c))
+  (define shifted (arithmetic-shift val -1))
+  (cpu-write c addr shifted)
+  ;; EOR
+  (set-cpu-a! c (bitwise-xor (cpu-a c) shifted))
+  (cpu-update-nz! c (cpu-a c))
+  (cpu-add-cycles! c cycles))
+
+;; --- RRA (ROR then ADC) ---
+(define (exec-rra c mode cycles)
+  (define-values (addr _) (get-address c mode))
+  (define val (cpu-read c addr))
+  (define carry-in (if (cpu-flag? c flag-c) #x80 0))
+  ;; ROR
+  (if (bit? val 0)
+      (set-cpu-flag! c flag-c)
+      (clear-cpu-flag! c flag-c))
+  (define rotated (bitwise-ior (arithmetic-shift val -1) carry-in))
+  (cpu-write c addr rotated)
+  ;; ADC with the rotated value
+  (define a (cpu-a c))
+  (define carry (if (cpu-flag? c flag-c) 1 0))
+  (define sum (+ a rotated carry))
+  (if (> sum #xFF)
+      (set-cpu-flag! c flag-c)
+      (clear-cpu-flag! c flag-c))
+  (define result (u8 sum))
+  (if (not (zero? (bitwise-and (bitwise-xor a result)
+                               (bitwise-and (bitwise-xor rotated result) #x80))))
+      (set-cpu-flag! c flag-v)
+      (clear-cpu-flag! c flag-v))
+  (set-cpu-a! c result)
+  (cpu-update-nz! c result)
+  (cpu-add-cycles! c cycles))
+
+;; --- ANC/AAC (AND then copy N to C) ---
+(define (exec-anc c)
+  (define-values (val _) (read-operand c addr-immediate))
+  (set-cpu-a! c (bitwise-and (cpu-a c) val))
+  (cpu-update-nz! c (cpu-a c))
+  ;; Copy N flag to C
+  (if (cpu-flag? c flag-n)
+      (set-cpu-flag! c flag-c)
+      (clear-cpu-flag! c flag-c))
+  (cpu-add-cycles! c 2))
+
+;; --- ALR/ASR (AND then LSR A) ---
+(define (exec-alr c)
+  (define-values (val _) (read-operand c addr-immediate))
+  (define result (bitwise-and (cpu-a c) val))
+  (if (bit? result 0)
+      (set-cpu-flag! c flag-c)
+      (clear-cpu-flag! c flag-c))
+  (set-cpu-a! c (arithmetic-shift result -1))
+  (cpu-update-nz! c (cpu-a c))
+  (cpu-add-cycles! c 2))
+
+;; --- ARR (AND then ROR, with special flag behavior) ---
+(define (exec-arr c)
+  (define-values (val _) (read-operand c addr-immediate))
+  (define and-result (bitwise-and (cpu-a c) val))
+  ;; ROR with carry
+  (define carry-in (if (cpu-flag? c flag-c) #x80 0))
+  (define result (u8 (bitwise-ior (arithmetic-shift and-result -1) carry-in)))
+  (set-cpu-a! c result)
+  (cpu-update-nz! c result)
+  ;; Special flag behavior: C = bit 6, V = bit 6 XOR bit 5
+  (if (bit? result 6)
+      (set-cpu-flag! c flag-c)
+      (clear-cpu-flag! c flag-c))
+  (if (not (= (if (bit? result 6) 1 0) (if (bit? result 5) 1 0)))
+      (set-cpu-flag! c flag-v)
+      (clear-cpu-flag! c flag-v))
+  (cpu-add-cycles! c 2))
+
+;; --- AXS/SBX (A AND X, then subtract immediate, store in X) ---
+(define (exec-axs c)
+  (define-values (val _) (read-operand c addr-immediate))
+  (define ax (bitwise-and (cpu-a c) (cpu-x c)))
+  (define result (- ax val))
+  ;; C is set like CMP (no borrow if result >= 0)
+  (if (>= result 0)
+      (set-cpu-flag! c flag-c)
+      (clear-cpu-flag! c flag-c))
+  (set-cpu-x! c (u8 result))
+  (cpu-update-nz! c (cpu-x c))
+  (cpu-add-cycles! c 2))
+
+;; --- ATX/LXA (AND immediate with A, then transfer to X) ---
+;; Note: The AND value is actually (A | magic_constant) AND imm
+;; where magic_constant varies by chip. On NES it appears to always
+;; be $FF, so the operation is: A = X = (A | $FF) & imm = imm
+;; Reference: https://forums.nesdev.org/viewtopic.php?t=3831
+(define (exec-atx c)
+  (define-values (val _) (read-operand c addr-immediate))
+  ;; On NES: A is ORed with $FF first, making it $FF
+  ;; Then AND with immediate = immediate value
+  (define result (bitwise-and (bitwise-ior (cpu-a c) #xFF) val))
+  (set-cpu-a! c result)
+  (set-cpu-x! c result)
+  (cpu-update-nz! c result)
+  (cpu-add-cycles! c 2))
+
+;; --- SHY/SYA (Store Y AND (high byte of addr + 1)) ---
+(define (exec-shy c)
+  (define pc (cpu-pc c))
+  (set-cpu-pc! c (u16 (+ pc 2)))
+  (define lo (cpu-read c pc))
+  (define hi (cpu-read c (u16 (+ pc 1))))
+  (define addr (u16 (+ (merge16 lo hi) (cpu-x c))))
+  (define result (bitwise-and (cpu-y c) (u8 (+ hi 1))))
+  ;; If page crossing, the address gets modified
+  (define actual-addr
+    (if (not (= hi (hi addr)))
+        (merge16 lo result)  ; Page crossed: use result as high byte
+        addr))
+  (cpu-write c actual-addr result)
+  (cpu-add-cycles! c 5))
+
+;; --- SHX/SXA (Store X AND (high byte of addr + 1)) ---
+(define (exec-shx c)
+  (define pc (cpu-pc c))
+  (set-cpu-pc! c (u16 (+ pc 2)))
+  (define lo (cpu-read c pc))
+  (define hi-byte (cpu-read c (u16 (+ pc 1))))
+  (define addr (u16 (+ (merge16 lo hi-byte) (cpu-y c))))
+  (define result (bitwise-and (cpu-x c) (u8 (+ hi-byte 1))))
+  ;; If page crossing, the address gets modified
+  (define actual-addr
+    (if (not (= hi-byte (hi addr)))
+        (merge16 lo result)
+        addr))
+  (cpu-write c actual-addr result)
+  (cpu-add-cycles! c 5))
+
+;; --- AHX/SHA (Store A AND X AND (high byte of addr + 1)) ---
+(define (exec-ahx-aby c)
+  (define pc (cpu-pc c))
+  (set-cpu-pc! c (u16 (+ pc 2)))
+  (define lo (cpu-read c pc))
+  (define hi-byte (cpu-read c (u16 (+ pc 1))))
+  (define addr (u16 (+ (merge16 lo hi-byte) (cpu-y c))))
+  (define result (bitwise-and (cpu-a c) (bitwise-and (cpu-x c) (u8 (+ hi-byte 1)))))
+  (define actual-addr
+    (if (not (= hi-byte (hi addr)))
+        (merge16 lo result)
+        addr))
+  (cpu-write c actual-addr result)
+  (cpu-add-cycles! c 5))
+
+(define (exec-ahx-izy c)
+  (define pc (cpu-pc c))
+  (set-cpu-pc! c (u16 (+ pc 1)))
+  (define ptr (cpu-read c pc))
+  (define lo (cpu-read c ptr))
+  (define hi-byte (cpu-read c (u8 (+ ptr 1))))
+  (define addr (u16 (+ (merge16 lo hi-byte) (cpu-y c))))
+  (define result (bitwise-and (cpu-a c) (bitwise-and (cpu-x c) (u8 (+ hi-byte 1)))))
+  (define actual-addr
+    (if (not (= hi-byte (hi addr)))
+        (merge16 lo result)
+        addr))
+  (cpu-write c actual-addr result)
+  (cpu-add-cycles! c 6))
+
+;; --- TAS/XAS (Transfer A AND X to SP, then store SP AND (high byte + 1)) ---
+(define (exec-tas c)
+  (define pc (cpu-pc c))
+  (set-cpu-pc! c (u16 (+ pc 2)))
+  (define lo (cpu-read c pc))
+  (define hi-byte (cpu-read c (u16 (+ pc 1))))
+  (define addr (u16 (+ (merge16 lo hi-byte) (cpu-y c))))
+  (set-cpu-sp! c (bitwise-and (cpu-a c) (cpu-x c)))
+  (define result (bitwise-and (cpu-sp c) (u8 (+ hi-byte 1))))
+  (define actual-addr
+    (if (not (= hi-byte (hi addr)))
+        (merge16 lo result)
+        addr))
+  (cpu-write c actual-addr result)
+  (cpu-add-cycles! c 5))
+
+;; --- LAS/LAR (Load A, X, and SP with (memory AND SP)) ---
+(define (exec-las c)
+  (define-values (val crossed?) (read-operand c addr-absolute-y))
+  (define result (bitwise-and val (cpu-sp c)))
+  (set-cpu-a! c result)
+  (set-cpu-x! c result)
+  (set-cpu-sp! c result)
+  (cpu-update-nz! c result)
+  (cpu-add-cycles! c (+ 4 (if crossed? 1 0))))
+
+;; --- XAA/ANE (A = (A OR magic) AND X AND imm) ---
+;; Highly unstable. Magic constant varies, commonly $EE or $00.
+(define (exec-xaa c)
+  (define-values (val _) (read-operand c addr-immediate))
+  ;; Using $FF as magic (acts as: A = A AND X AND imm)
+  (define result (bitwise-and (cpu-a c) (bitwise-and (cpu-x c) val)))
+  (set-cpu-a! c result)
+  (cpu-update-nz! c result)
+  (cpu-add-cycles! c 2))
+
+;; --- KIL/JAM/HLT (Halt CPU) ---
+(define (exec-kil c)
+  ;; Just error - the CPU should halt
+  (error 'cpu "illegal opcode: KIL/JAM at $~a"
+         (~r (- (cpu-pc c) 1) #:base 16 #:min-width 4 #:pad-string "0")))
+
+;; ============================================================================
 ;; Opcode Table Population
 ;; ============================================================================
 
@@ -674,6 +997,166 @@
 
 ;; --- BRK ---
 (register-opcode! #x00 "BRK" 'imp 1 7 (λ (c) (exec-brk c)))
+
+;; ============================================================================
+;; Illegal Opcode Table Population
+;; ============================================================================
+
+;; --- Illegal NOPs (1-byte, implied) ---
+(register-opcode! #x1A "*NOP" 'imp 1 2 (λ (c) (exec-nop-illegal c)))
+(register-opcode! #x3A "*NOP" 'imp 1 2 (λ (c) (exec-nop-illegal c)))
+(register-opcode! #x5A "*NOP" 'imp 1 2 (λ (c) (exec-nop-illegal c)))
+(register-opcode! #x7A "*NOP" 'imp 1 2 (λ (c) (exec-nop-illegal c)))
+(register-opcode! #xDA "*NOP" 'imp 1 2 (λ (c) (exec-nop-illegal c)))
+(register-opcode! #xFA "*NOP" 'imp 1 2 (λ (c) (exec-nop-illegal c)))
+
+;; --- DOP (Double NOP / 2-byte NOP) ---
+;; Immediate mode
+(register-opcode! #x80 "*NOP" 'imm 2 2 (λ (c) (exec-dop-imm c)))
+(register-opcode! #x82 "*NOP" 'imm 2 2 (λ (c) (exec-dop-imm c)))
+(register-opcode! #x89 "*NOP" 'imm 2 2 (λ (c) (exec-dop-imm c)))
+(register-opcode! #xC2 "*NOP" 'imm 2 2 (λ (c) (exec-dop-imm c)))
+(register-opcode! #xE2 "*NOP" 'imm 2 2 (λ (c) (exec-dop-imm c)))
+;; Zero page mode
+(register-opcode! #x04 "*NOP" 'zp 2 3 (λ (c) (exec-dop-zp c)))
+(register-opcode! #x44 "*NOP" 'zp 2 3 (λ (c) (exec-dop-zp c)))
+(register-opcode! #x64 "*NOP" 'zp 2 3 (λ (c) (exec-dop-zp c)))
+;; Zero page,X mode
+(register-opcode! #x14 "*NOP" 'zpx 2 4 (λ (c) (exec-dop-zpx c)))
+(register-opcode! #x34 "*NOP" 'zpx 2 4 (λ (c) (exec-dop-zpx c)))
+(register-opcode! #x54 "*NOP" 'zpx 2 4 (λ (c) (exec-dop-zpx c)))
+(register-opcode! #x74 "*NOP" 'zpx 2 4 (λ (c) (exec-dop-zpx c)))
+(register-opcode! #xD4 "*NOP" 'zpx 2 4 (λ (c) (exec-dop-zpx c)))
+(register-opcode! #xF4 "*NOP" 'zpx 2 4 (λ (c) (exec-dop-zpx c)))
+
+;; --- TOP (Triple NOP / 3-byte NOP) ---
+(register-opcode! #x0C "*NOP" 'abs 3 4 (λ (c) (exec-top-abs c)))
+(register-opcode! #x1C "*NOP" 'abx 3 4 (λ (c) (exec-top-abx c)))
+(register-opcode! #x3C "*NOP" 'abx 3 4 (λ (c) (exec-top-abx c)))
+(register-opcode! #x5C "*NOP" 'abx 3 4 (λ (c) (exec-top-abx c)))
+(register-opcode! #x7C "*NOP" 'abx 3 4 (λ (c) (exec-top-abx c)))
+(register-opcode! #xDC "*NOP" 'abx 3 4 (λ (c) (exec-top-abx c)))
+(register-opcode! #xFC "*NOP" 'abx 3 4 (λ (c) (exec-top-abx c)))
+
+;; --- LAX (Load A and X) ---
+(register-opcode! #xA7 "*LAX" 'zp 2 3 (λ (c) (exec-lax c addr-zero-page 3)))
+(register-opcode! #xB7 "*LAX" 'zpy 2 4 (λ (c) (exec-lax c addr-zero-page-y 4)))
+(register-opcode! #xAF "*LAX" 'abs 3 4 (λ (c) (exec-lax c addr-absolute 4)))
+(register-opcode! #xBF "*LAX" 'aby 3 4 (λ (c) (exec-lax c addr-absolute-y 4)))
+(register-opcode! #xA3 "*LAX" 'izx 2 6 (λ (c) (exec-lax c addr-indirect-x 6)))
+(register-opcode! #xB3 "*LAX" 'izy 2 5 (λ (c) (exec-lax c addr-indirect-y 5)))
+
+;; --- SAX (Store A AND X) ---
+(register-opcode! #x87 "*SAX" 'zp 2 3 (λ (c) (exec-sax c addr-zero-page 3)))
+(register-opcode! #x97 "*SAX" 'zpy 2 4 (λ (c) (exec-sax c addr-zero-page-y 4)))
+(register-opcode! #x8F "*SAX" 'abs 3 4 (λ (c) (exec-sax c addr-absolute 4)))
+(register-opcode! #x83 "*SAX" 'izx 2 6 (λ (c) (exec-sax c addr-indirect-x 6)))
+
+;; --- DCP (Decrement then Compare) ---
+(register-opcode! #xC7 "*DCP" 'zp 2 5 (λ (c) (exec-dcp c addr-zero-page 5)))
+(register-opcode! #xD7 "*DCP" 'zpx 2 6 (λ (c) (exec-dcp c addr-zero-page-x 6)))
+(register-opcode! #xCF "*DCP" 'abs 3 6 (λ (c) (exec-dcp c addr-absolute 6)))
+(register-opcode! #xDF "*DCP" 'abx 3 7 (λ (c) (exec-dcp c addr-absolute-x 7)))
+(register-opcode! #xDB "*DCP" 'aby 3 7 (λ (c) (exec-dcp c addr-absolute-y 7)))
+(register-opcode! #xC3 "*DCP" 'izx 2 8 (λ (c) (exec-dcp c addr-indirect-x 8)))
+(register-opcode! #xD3 "*DCP" 'izy 2 8 (λ (c) (exec-dcp c addr-indirect-y 8)))
+
+;; --- ISC/ISB (Increment then Subtract) ---
+(register-opcode! #xE7 "*ISC" 'zp 2 5 (λ (c) (exec-isc c addr-zero-page 5)))
+(register-opcode! #xF7 "*ISC" 'zpx 2 6 (λ (c) (exec-isc c addr-zero-page-x 6)))
+(register-opcode! #xEF "*ISC" 'abs 3 6 (λ (c) (exec-isc c addr-absolute 6)))
+(register-opcode! #xFF "*ISC" 'abx 3 7 (λ (c) (exec-isc c addr-absolute-x 7)))
+(register-opcode! #xFB "*ISC" 'aby 3 7 (λ (c) (exec-isc c addr-absolute-y 7)))
+(register-opcode! #xE3 "*ISC" 'izx 2 8 (λ (c) (exec-isc c addr-indirect-x 8)))
+(register-opcode! #xF3 "*ISC" 'izy 2 8 (λ (c) (exec-isc c addr-indirect-y 8)))
+
+;; --- SLO (ASL then ORA) ---
+(register-opcode! #x07 "*SLO" 'zp 2 5 (λ (c) (exec-slo c addr-zero-page 5)))
+(register-opcode! #x17 "*SLO" 'zpx 2 6 (λ (c) (exec-slo c addr-zero-page-x 6)))
+(register-opcode! #x0F "*SLO" 'abs 3 6 (λ (c) (exec-slo c addr-absolute 6)))
+(register-opcode! #x1F "*SLO" 'abx 3 7 (λ (c) (exec-slo c addr-absolute-x 7)))
+(register-opcode! #x1B "*SLO" 'aby 3 7 (λ (c) (exec-slo c addr-absolute-y 7)))
+(register-opcode! #x03 "*SLO" 'izx 2 8 (λ (c) (exec-slo c addr-indirect-x 8)))
+(register-opcode! #x13 "*SLO" 'izy 2 8 (λ (c) (exec-slo c addr-indirect-y 8)))
+
+;; --- RLA (ROL then AND) ---
+(register-opcode! #x27 "*RLA" 'zp 2 5 (λ (c) (exec-rla c addr-zero-page 5)))
+(register-opcode! #x37 "*RLA" 'zpx 2 6 (λ (c) (exec-rla c addr-zero-page-x 6)))
+(register-opcode! #x2F "*RLA" 'abs 3 6 (λ (c) (exec-rla c addr-absolute 6)))
+(register-opcode! #x3F "*RLA" 'abx 3 7 (λ (c) (exec-rla c addr-absolute-x 7)))
+(register-opcode! #x3B "*RLA" 'aby 3 7 (λ (c) (exec-rla c addr-absolute-y 7)))
+(register-opcode! #x23 "*RLA" 'izx 2 8 (λ (c) (exec-rla c addr-indirect-x 8)))
+(register-opcode! #x33 "*RLA" 'izy 2 8 (λ (c) (exec-rla c addr-indirect-y 8)))
+
+;; --- SRE (LSR then EOR) ---
+(register-opcode! #x47 "*SRE" 'zp 2 5 (λ (c) (exec-sre c addr-zero-page 5)))
+(register-opcode! #x57 "*SRE" 'zpx 2 6 (λ (c) (exec-sre c addr-zero-page-x 6)))
+(register-opcode! #x4F "*SRE" 'abs 3 6 (λ (c) (exec-sre c addr-absolute 6)))
+(register-opcode! #x5F "*SRE" 'abx 3 7 (λ (c) (exec-sre c addr-absolute-x 7)))
+(register-opcode! #x5B "*SRE" 'aby 3 7 (λ (c) (exec-sre c addr-absolute-y 7)))
+(register-opcode! #x43 "*SRE" 'izx 2 8 (λ (c) (exec-sre c addr-indirect-x 8)))
+(register-opcode! #x53 "*SRE" 'izy 2 8 (λ (c) (exec-sre c addr-indirect-y 8)))
+
+;; --- RRA (ROR then ADC) ---
+(register-opcode! #x67 "*RRA" 'zp 2 5 (λ (c) (exec-rra c addr-zero-page 5)))
+(register-opcode! #x77 "*RRA" 'zpx 2 6 (λ (c) (exec-rra c addr-zero-page-x 6)))
+(register-opcode! #x6F "*RRA" 'abs 3 6 (λ (c) (exec-rra c addr-absolute 6)))
+(register-opcode! #x7F "*RRA" 'abx 3 7 (λ (c) (exec-rra c addr-absolute-x 7)))
+(register-opcode! #x7B "*RRA" 'aby 3 7 (λ (c) (exec-rra c addr-absolute-y 7)))
+(register-opcode! #x63 "*RRA" 'izx 2 8 (λ (c) (exec-rra c addr-indirect-x 8)))
+(register-opcode! #x73 "*RRA" 'izy 2 8 (λ (c) (exec-rra c addr-indirect-y 8)))
+
+;; --- ANC (AND then copy N to C) ---
+(register-opcode! #x0B "*ANC" 'imm 2 2 (λ (c) (exec-anc c)))
+(register-opcode! #x2B "*ANC" 'imm 2 2 (λ (c) (exec-anc c)))
+
+;; --- ALR (AND then LSR A) ---
+(register-opcode! #x4B "*ALR" 'imm 2 2 (λ (c) (exec-alr c)))
+
+;; --- ARR (AND then ROR with special flags) ---
+(register-opcode! #x6B "*ARR" 'imm 2 2 (λ (c) (exec-arr c)))
+
+;; --- AXS (A AND X, subtract immediate, store in X) ---
+(register-opcode! #xCB "*AXS" 'imm 2 2 (λ (c) (exec-axs c)))
+
+;; --- ATX/LXA (AND then transfer to X) ---
+(register-opcode! #xAB "*ATX" 'imm 2 2 (λ (c) (exec-atx c)))
+
+;; --- SHY (Store Y AND (high byte + 1)) ---
+(register-opcode! #x9C "*SHY" 'abx 3 5 (λ (c) (exec-shy c)))
+
+;; --- SHX (Store X AND (high byte + 1)) ---
+(register-opcode! #x9E "*SHX" 'aby 3 5 (λ (c) (exec-shx c)))
+
+;; --- AHX (Store A AND X AND (high byte + 1)) ---
+(register-opcode! #x9F "*AHX" 'aby 3 5 (λ (c) (exec-ahx-aby c)))
+(register-opcode! #x93 "*AHX" 'izy 2 6 (λ (c) (exec-ahx-izy c)))
+
+;; --- TAS (Transfer A AND X to SP, store AND with high byte) ---
+(register-opcode! #x9B "*TAS" 'aby 3 5 (λ (c) (exec-tas c)))
+
+;; --- LAS (Load A, X, SP with memory AND SP) ---
+(register-opcode! #xBB "*LAS" 'aby 3 4 (λ (c) (exec-las c)))
+
+;; --- XAA (Unstable: A = (A OR magic) AND X AND imm) ---
+(register-opcode! #x8B "*XAA" 'imm 2 2 (λ (c) (exec-xaa c)))
+
+;; --- Unofficial SBC (identical to $E9) ---
+(register-opcode! #xEB "*SBC" 'imm 2 2 (λ (c) (exec-sbc c addr-immediate 2)))
+
+;; --- KIL/JAM/HLT (Halt CPU - various opcodes) ---
+(register-opcode! #x02 "*KIL" 'imp 1 2 (λ (c) (exec-kil c)))
+(register-opcode! #x12 "*KIL" 'imp 1 2 (λ (c) (exec-kil c)))
+(register-opcode! #x22 "*KIL" 'imp 1 2 (λ (c) (exec-kil c)))
+(register-opcode! #x32 "*KIL" 'imp 1 2 (λ (c) (exec-kil c)))
+(register-opcode! #x42 "*KIL" 'imp 1 2 (λ (c) (exec-kil c)))
+(register-opcode! #x52 "*KIL" 'imp 1 2 (λ (c) (exec-kil c)))
+(register-opcode! #x62 "*KIL" 'imp 1 2 (λ (c) (exec-kil c)))
+(register-opcode! #x72 "*KIL" 'imp 1 2 (λ (c) (exec-kil c)))
+(register-opcode! #x92 "*KIL" 'imp 1 2 (λ (c) (exec-kil c)))
+(register-opcode! #xB2 "*KIL" 'imp 1 2 (λ (c) (exec-kil c)))
+(register-opcode! #xD2 "*KIL" 'imp 1 2 (λ (c) (exec-kil c)))
+(register-opcode! #xF2 "*KIL" 'imp 1 2 (λ (c) (exec-kil c)))
 
 ;; ============================================================================
 ;; Executor Installation
