@@ -106,9 +106,9 @@ Tests that crash with an illegal opcode while status is still `$80` are treated 
 |----------|--------|--------|
 | CPU      | 16     | 0      |
 | PPU      | 3      | 7      |
-| APU      | 3      | 5      |
+| APU      | 1      | 7      |
 | Mappers  | 1      | 5      |
-| **Total**| **23** | **17** |
+| **Total**| **21** | **19** |
 
 ### CPU Tests (instr_test-v5)
 
@@ -150,9 +150,9 @@ Tests that crash with an illegal opcode while status is still `$80` are treated 
 
 | Test | Status | Notes |
 |------|--------|-------|
-| 1-len_ctr.nes | PASS | |
+| 1-len_ctr.nes | FAIL | Length table/timing/$4015 issue |
 | 2-len_table.nes | PASS | |
-| 3-irq_flag.nes | PASS | |
+| 3-irq_flag.nes | FAIL | IRQ flag behavior |
 | 4-jitter.nes | FAIL | Frame IRQ timing |
 | 5-len_timing.nes | FAIL | Length counter timing |
 | 6-irq_flag_timing.nes | FAIL | IRQ flag timing |
