@@ -99,30 +99,56 @@
          (modulo (- addr (handler-start h)) (handler-mirror-size h)))
       addr))
 
-;; Read a byte from the bus (O(1) lookup via page table)
+;; Check if handler covers this address
+(define (handler-covers? h addr)
+  (and (>= addr (handler-start h))
+       (<= addr (handler-end h))))
+
+;; Find the handler for an address (linear search fallback)
+(define (find-handler handlers addr)
+  (for/first ([h (in-list handlers)]
+              #:when (handler-covers? h addr))
+    h))
+
+;; Read a byte from the bus
+;; Uses page table for O(1) lookup when handler covers full page,
+;; falls back to linear search for contested pages
 (define (bus-read b addr)
   (define page (quotient addr 256))
   (define h (vector-ref (bus-page-table b) page))
+  ;; Use page table handler only if it actually covers this address
+  ;; Otherwise fall back to linear search for contested pages
+  (define actual-h
+    (if (and h (handler-covers? h addr))
+        h
+        (find-handler (unbox (bus-handlers-box b)) addr)))
   (cond
-    [(and h (handler-read h))
-     (define effective-addr (mirror-addr h addr))
-     ((handler-read h) effective-addr)]
-    [h
+    [(and actual-h (handler-read actual-h))
+     (define effective-addr (mirror-addr actual-h addr))
+     ((handler-read actual-h) effective-addr)]
+    [actual-h
      ;; Handler exists but no read function - use default
      ((bus-default-read b) addr)]
     [else
      ;; No handler found - use default
      ((bus-default-read b) addr)]))
 
-;; Write a byte to the bus (O(1) lookup via page table)
+;; Write a byte to the bus
+;; Uses page table for O(1) lookup when handler covers full page,
+;; falls back to linear search for contested pages
 (define (bus-write b addr val)
   (define page (quotient addr 256))
   (define h (vector-ref (bus-page-table b) page))
+  ;; Use page table handler only if it actually covers this address
+  (define actual-h
+    (if (and h (handler-covers? h addr))
+        h
+        (find-handler (unbox (bus-handlers-box b)) addr)))
   (cond
-    [(and h (handler-write h))
-     (define effective-addr (mirror-addr h addr))
-     ((handler-write h) effective-addr (u8 val))]
-    [h
+    [(and actual-h (handler-write actual-h))
+     (define effective-addr (mirror-addr actual-h addr))
+     ((handler-write actual-h) effective-addr (u8 val))]
+    [actual-h
      ;; Handler exists but no write function - use default
      ((bus-default-write b) addr (u8 val))]
     [else
