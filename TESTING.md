@@ -105,10 +105,10 @@ Tests that crash with an illegal opcode while status is still `$80` are treated 
 | Category | Passed | Failed |
 |----------|--------|--------|
 | CPU      | 16     | 0      |
-| PPU      | 2      | 8      |
+| PPU      | 3      | 7      |
 | APU      | 3      | 5      |
 | Mappers  | 1      | 5      |
-| **Total**| **22** | **18** |
+| **Total**| **23** | **17** |
 
 ### CPU Tests (instr_test-v5)
 
@@ -138,7 +138,7 @@ Tests that crash with an illegal opcode while status is still `$80` are treated 
 | 01-vbl_basics.nes | PASS | |
 | 02-vbl_set_time.nes | FAIL | VBlank set timing |
 | 03-vbl_clear_time.nes | PASS | |
-| 04-nmi_control.nes | FAIL | NMI timing after instruction |
+| 04-nmi_control.nes | PASS | |
 | 05-nmi_timing.nes | FAIL | |
 | 06-suppression.nes | FAIL | |
 | 07-nmi_on_timing.nes | FAIL | |
@@ -185,8 +185,8 @@ Some older test ROMs don't use the Blargg `$6000` protocol and require visual in
 
 ## Known Issues
 
-1. **NMI timing** — NMI occurs one instruction too early
-2. **Odd frame skip** — Clock skip timing relative to BG enable is wrong
+1. **Cycle-accurate PPU timing** — Tests 02, 05-08, 10 require cycle-level precision
+2. **Odd frame skip** — Tests 09-10 fail due to clock skip timing relative to BG enable
 3. **APU timing** — Frame IRQ and length counter timing off
 4. **DMC** — Buffer/rate implementation needs work
 5. **MMC3 IRQ** — Scanline counter not working correctly
