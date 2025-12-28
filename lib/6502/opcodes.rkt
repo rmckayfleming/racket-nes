@@ -683,14 +683,14 @@
 (define (exec-shy c)
   (define pc (cpu-pc c))
   (set-cpu-pc! c (u16 (+ pc 2)))
-  (define lo (cpu-read c pc))
-  (define hi (cpu-read c (u16 (+ pc 1))))
-  (define addr (u16 (+ (merge16 lo hi) (cpu-x c))))
-  (define result (bitwise-and (cpu-y c) (u8 (+ hi 1))))
+  (define lo-byte (cpu-read c pc))
+  (define hi-byte (cpu-read c (u16 (+ pc 1))))
+  (define addr (u16 (+ (merge16 lo-byte hi-byte) (cpu-x c))))
+  (define result (bitwise-and (cpu-y c) (u8 (+ hi-byte 1))))
   ;; If page crossing, the address gets modified
   (define actual-addr
-    (if (not (= hi (hi addr)))
-        (merge16 lo result)  ; Page crossed: use result as high byte
+    (if (not (= hi-byte (hi addr)))
+        (merge16 lo-byte result)  ; Page crossed: use result as high byte
         addr))
   (cpu-write c actual-addr result)
   (cpu-add-cycles! c 5))
