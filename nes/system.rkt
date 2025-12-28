@@ -37,7 +37,9 @@
 
  ;; Execution
  nes-step!          ; Execute one CPU instruction
- nes-run-frame!     ; Run until next frame boundary (placeholder)
+ nes-step-fast!     ; Fast step for headless mode (minimal PPU/APU)
+ nes-run-frame!     ; Run until next frame boundary
+ nes-run-frame-fast! ; Fast frame for headless mode
  nes-reset!         ; Reset the system
 
  ;; State
@@ -318,6 +320,8 @@
   (for ([_ (in-range ppu-cycles)])
     (define cycle (ppu-cycle p))
     (define scanline (ppu-scanline p))
+    ;; Cache rendering-enabled check (called 4 times per tick otherwise)
+    (define rendering-enabled? (ppu-rendering-enabled? p))
 
     ;; Odd frame cycle skip: on pre-render scanline, cycle 0, if rendering
     ;; is enabled and this is an odd frame, skip cycle 0 entirely.
@@ -327,7 +331,7 @@
       (and (= scanline SCANLINE-PRE-RENDER)
            (= cycle 0)
            (ppu-odd-frame? p)
-           (ppu-rendering-enabled? p)))
+           rendering-enabled?))
 
     (unless skip-this-cycle?
       ;; VBlank start: scanline 241, cycle 1
@@ -352,7 +356,7 @@
       (when (and (= scanline SCANLINE-PRE-RENDER)
                  (>= cycle 280)
                  (<= cycle 304)
-                 (ppu-rendering-enabled? p))
+                 rendering-enabled?)
         ;; Copy vertical bits: fine Y, coarse Y, and Y nametable bit
         ;; v: yyy NN YYYYY XXXXX
         ;;    |||  | |||||
@@ -369,7 +373,7 @@
       (when (and (or (< scanline VISIBLE-HEIGHT)             ; Visible scanlines
                      (= scanline SCANLINE-PRE-RENDER))       ; Or pre-render
                  (= cycle 257)
-                 (ppu-rendering-enabled? p))
+                 rendering-enabled?)
         ;; Copy horizontal bits: coarse X and X nametable bit
         (define v (ppu-v p))
         (define t (ppu-t p))
@@ -383,7 +387,7 @@
       ;; This is used by the renderer to get the correct scroll for each line
       (when (and (< scanline VISIBLE-HEIGHT)
                  (= cycle 0)
-                 (ppu-rendering-enabled? p))
+                 rendering-enabled?)
         (ppu-capture-scanline-scroll! p scanline))
 
       ;; Sprite 0 hit detection during visible scanlines
@@ -427,6 +431,104 @@
   (let loop ()
     (when (= (ppu-frame p) start-frame)
       (nes-step! sys)
+      (loop))))
+
+;; ============================================================================
+;; Fast Execution (Headless Mode)
+;; ============================================================================
+;; These functions skip expensive PPU operations (sprite 0 hit, scroll capture)
+;; and APU audio processing. Only basic VBlank/NMI timing is maintained.
+;; Use for test automation where cycle-accurate PPU emulation isn't needed.
+
+;; Fast PPU tick - only updates position and triggers VBlank/NMI
+;; Skips: sprite 0 hit, scroll register copying, scanline scroll capture
+(define (ppu-tick-fast! sys ppu-cycles)
+  (define p (nes-ppu sys))
+
+  (for ([_ (in-range ppu-cycles)])
+    (define cycle (ppu-cycle p))
+    (define scanline (ppu-scanline p))
+
+    ;; VBlank start: scanline 241, cycle 1 - trigger NMI
+    (when (and (= scanline SCANLINE-VBLANK-START)
+               (= cycle 1))
+      (set-ppu-nmi-occurred! p #t)
+      (when (ppu-ctrl-flag? p CTRL-NMI-ENABLE)
+        (set-ppu-nmi-output! p #t)
+        (set-box! (nes-nmi-pending-box sys) #t)))
+
+    ;; Pre-render scanline: clear flags at cycle 1
+    (when (and (= scanline SCANLINE-PRE-RENDER)
+               (= cycle 1))
+      (set-ppu-nmi-occurred! p #f)
+      (set-ppu-nmi-output! p #f)
+      (set-ppu-sprite0-hit! p #f)
+      (set-ppu-sprite-overflow! p #f))
+
+    ;; Advance position
+    (define next-cycle (+ cycle 1))
+    (cond
+      [(>= next-cycle CYCLES-PER-SCANLINE)
+       (set-ppu-cycle! p 0)
+       (define next-scanline (+ scanline 1))
+       (cond
+         [(>= next-scanline SCANLINES-TOTAL)
+          (set-ppu-scanline! p 0)
+          (set-ppu-frame! p (+ 1 (ppu-frame p)))
+          (set-ppu-odd-frame! p (not (ppu-odd-frame? p)))
+          (set-box! (nes-frame-count-box sys)
+                    (+ 1 (unbox (nes-frame-count-box sys))))]
+         [else
+          (set-ppu-scanline! p next-scanline)])]
+      [else
+       (set-ppu-cycle! p next-cycle)])))
+
+;; Fast step - minimal PPU/APU processing for headless mode
+;; Skips: sprite 0 hit detection, scroll register operations, audio output
+(define (nes-step-fast! sys)
+  (define cpu (nes-cpu sys))
+  (define dma-stall (unbox (nes-dma-stall-box sys)))
+
+  (if (> dma-stall 0)
+      ;; DMA stall: consume stall cycles
+      (let ([stall-cycles (min dma-stall 1)])
+        (set-box! (nes-dma-stall-box sys) (- dma-stall stall-cycles))
+        (set-box! (nes-total-cycles-box sys)
+                  (+ (unbox (nes-total-cycles-box sys)) stall-cycles))
+        (ppu-tick-fast! sys (* stall-cycles 3))
+        stall-cycles)
+
+      ;; Normal execution
+      (let ([cycles-before (cpu-cycles cpu)])
+        ;; Check for pending NMI
+        (when (unbox (nes-nmi-pending-box sys))
+          (set-box! (nes-nmi-pending-box sys) #f)
+          (set-cpu-nmi-pending! cpu #t))
+
+        ;; Execute one instruction
+        (cpu-step! cpu)
+
+        ;; Calculate cycles consumed
+        (define cycles-after (cpu-cycles cpu))
+        (define cycles (- cycles-after cycles-before))
+
+        ;; Update total cycles
+        (set-box! (nes-total-cycles-box sys)
+                  (+ (unbox (nes-total-cycles-box sys)) cycles))
+
+        ;; Fast PPU tick (only VBlank/NMI timing)
+        (ppu-tick-fast! sys (* cycles 3))
+
+        cycles)))
+
+;; Run one frame in fast mode
+(define (nes-run-frame-fast! sys)
+  (define p (nes-ppu sys))
+  (define start-frame (ppu-frame p))
+
+  (let loop ()
+    (when (= (ppu-frame p) start-frame)
+      (nes-step-fast! sys)
       (loop))))
 
 ;; ============================================================================

@@ -42,8 +42,10 @@
 ;; - name: symbolic name for debugging
 (struct handler (start end read write mirror-size name) #:transparent)
 
-;; The bus holds a list of handlers and a default handler
-(struct bus (handlers-box default-read default-write) #:transparent)
+;; The bus holds a list of handlers, a default handler, and a page table for O(1) lookup
+;; page-table: vector of 256 entries, one per 256-byte page
+;;             each entry is either #f (unmapped) or a handler
+(struct bus (handlers-box default-read default-write page-table) #:transparent)
 
 ;; ============================================================================
 ;; Bus Creation
@@ -54,7 +56,8 @@
 ;; default-write: called for unmapped write addresses, receives addr and value
 (define (make-bus #:default-read [default-read (λ (addr) #xFF)]
                   #:default-write [default-write (λ (addr val) (void))])
-  (bus (box '()) default-read default-write))
+  ;; Page table: 256 entries for 16-bit address space (256 pages of 256 bytes)
+  (bus (box '()) default-read default-write (make-vector 256 #f)))
 
 ;; ============================================================================
 ;; Handler Registration
@@ -71,7 +74,15 @@
                           #:name [name 'unnamed])
   (define h (handler start end read write mirror-size name))
   (define handlers (unbox (bus-handlers-box b)))
-  (set-box! (bus-handlers-box b) (append handlers (list h))))
+  (set-box! (bus-handlers-box b) (append handlers (list h)))
+  ;; Update page table for O(1) lookup
+  ;; Only set pages that aren't already mapped (first handler wins)
+  (define page-table (bus-page-table b))
+  (define start-page (quotient start 256))
+  (define end-page (quotient end 256))
+  (for ([page (in-range start-page (+ end-page 1))])
+    (when (not (vector-ref page-table page))
+      (vector-set! page-table page h))))
 
 ;; Get list of handlers (for debugging)
 (define (bus-handlers b)
@@ -81,13 +92,6 @@
 ;; Memory Access
 ;; ============================================================================
 
-;; Find the handler for an address (first match)
-(define (find-handler handlers addr)
-  (for/first ([h (in-list handlers)]
-              #:when (and (>= addr (handler-start h))
-                          (<= addr (handler-end h))))
-    h))
-
 ;; Compute the effective address after mirroring
 (define (mirror-addr h addr)
   (if (handler-mirror-size h)
@@ -95,10 +99,10 @@
          (modulo (- addr (handler-start h)) (handler-mirror-size h)))
       addr))
 
-;; Read a byte from the bus
+;; Read a byte from the bus (O(1) lookup via page table)
 (define (bus-read b addr)
-  (define handlers (unbox (bus-handlers-box b)))
-  (define h (find-handler handlers addr))
+  (define page (quotient addr 256))
+  (define h (vector-ref (bus-page-table b) page))
   (cond
     [(and h (handler-read h))
      (define effective-addr (mirror-addr h addr))
@@ -110,10 +114,10 @@
      ;; No handler found - use default
      ((bus-default-read b) addr)]))
 
-;; Write a byte to the bus
+;; Write a byte to the bus (O(1) lookup via page table)
 (define (bus-write b addr val)
-  (define handlers (unbox (bus-handlers-box b)))
-  (define h (find-handler handlers addr))
+  (define page (quotient addr 256))
+  (define h (vector-ref (bus-page-table b) page))
   (cond
     [(and h (handler-write h))
      (define effective-addr (mirror-addr h addr))

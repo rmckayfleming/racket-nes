@@ -177,22 +177,22 @@
                        [else (raise e)]))])
     (cond
       [(step-limit)
-       ;; Run for N steps
+       ;; Run for N steps (use fast mode - no PPU graphics, minimal timing)
        (for ([_ (in-range (step-limit))])
-         (nes-step! sys))
+         (nes-step-fast! sys))
        (printf "Completed ~a steps.\n" (step-limit))]
 
       [(frame-limit)
-       ;; Run for N frames
+       ;; Run for N frames (use fast mode - no PPU graphics, minimal timing)
        (for ([_ (in-range (frame-limit))])
-         (nes-run-frame! sys))
+         (nes-run-frame-fast! sys))
        (printf "Completed ~a frames.\n" (frame-limit))]
 
       [else
        ;; Run forever (or until something stops it)
        (printf "Running indefinitely (Ctrl+C to stop)...\n")
        (let loop ()
-         (nes-step! sys)
+         (nes-step-fast! sys)
          (loop))]))
 
   (when halted-early

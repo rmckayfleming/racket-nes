@@ -121,127 +121,139 @@
 ;; pbus: PPU bus for memory access
 ;; scanline: current scanline (0-239 visible)
 ;; x: current X position (0-255 visible, we check 0-254 since x=255 never hits)
+;;
+;; OPTIMIZATION: Checks are ordered from cheapest to most expensive:
+;; 1. Sprite 0 scanline bounds (most common early exit)
+;; 2. Sprite 0 X bounds
+;; 3. Rendering enabled flags
+;; 4. Left-edge clipping
+;; 5. Sprite pixel opacity (requires tile decode)
+;; 6. Background pixel opacity (requires tile decode)
 (define (check-sprite0-hit? p pbus scanline x)
-  ;; Check if both background and sprites are enabled
-  (and (ppu-mask-flag? p MASK-BG-ENABLE)
+  ;; FAST PATH: Check sprite 0 bounds first (cheapest check, most likely to fail)
+  (define oam (ppu-oam p))
+  (define sprite0-y (sprite-y oam 0))
+  (define sprite0-x (sprite-x oam 0))
+  (define sprite-height (if (ppu-ctrl-flag? p CTRL-SPRITE-SIZE) 16 8))
+  ;; Actual Y on screen (OAM Y is scanline - 1)
+  (define screen-y (+ sprite0-y 1))
+
+  ;; Early exit if sprite 0 is not on this scanline
+  (and (>= scanline screen-y)
+       (< scanline (+ screen-y sprite-height))
+       ;; Early exit if sprite 0 doesn't cover this X
+       (>= x sprite0-x)
+       (< x (+ sprite0-x 8))
+
+       ;; Now check if rendering is enabled (less common to change)
+       (ppu-mask-flag? p MASK-BG-ENABLE)
        (ppu-mask-flag? p MASK-SPRITE-ENABLE)
 
        ;; Check left-edge clipping (x < 8 and clipping enabled)
        (not (and (< x 8) (not (ppu-mask-flag? p MASK-BG-LEFT))))
        (not (and (< x 8) (not (ppu-mask-flag? p MASK-SPRITE-LEFT))))
 
-       ;; Get sprite 0 data and check overlap
-       (let* ([oam (ppu-oam p)]
-              [sprite0-y (sprite-y oam 0)]
-              [sprite0-tile (sprite-tile oam 0)]
+       ;; SLOW PATH: We're in the sprite 0 region, now check actual pixels
+       (let* ([sprite0-tile (sprite-tile oam 0)]
               [sprite0-attr (sprite-attr oam 0)]
-              [sprite0-x (sprite-x oam 0)]
-              [sprite-height (if (ppu-ctrl-flag? p CTRL-SPRITE-SIZE) 16 8)]
-              ;; Actual Y on screen (OAM Y is scanline - 1)
-              [screen-y (+ sprite0-y 1)])
+              [ppu-read (λ (addr) (ppu-bus-read pbus addr))]
+              ;; Get sprite pixel
+              [sprite-row (- scanline screen-y)]
+              [sprite-col (- x sprite0-x)]
+              [flip-h (sprite-flip-h? sprite0-attr)]
+              [flip-v (sprite-flip-v? sprite0-attr)]
+              [actual-row (if flip-v (- (- sprite-height 1) sprite-row) sprite-row)]
+              [actual-col (if flip-h (- 7 sprite-col) sprite-col)]
 
-         ;; Check if sprite 0 is on this scanline and covers this X
-         (and (>= scanline screen-y)
-              (< scanline (+ screen-y sprite-height))
-              (>= x sprite0-x)
-              (< x (+ sprite0-x 8))
+              ;; For 8x16, determine pattern base and tile
+              [sprite-pattern-base
+               (if (= sprite-height 16)
+                   (if (bit? sprite0-tile 0) #x1000 #x0000)
+                   (if (ppu-ctrl-flag? p CTRL-SPRITE-PATTERN) #x1000 #x0000))]
+              [base-tile
+               (if (= sprite-height 16)
+                   (bitwise-and sprite0-tile #xFE)
+                   sprite0-tile)]
 
-              ;; Both sprite 0 and potentially background are at this pixel
-              ;; Now check if both have opaque pixels
-              (let* ([ppu-read (λ (addr) (ppu-bus-read pbus addr))]
-                     ;; Get sprite pixel
-                     [sprite-row (- scanline screen-y)]
-                     [sprite-col (- x sprite0-x)]
-                     [flip-h (sprite-flip-h? sprite0-attr)]
-                     [flip-v (sprite-flip-v? sprite0-attr)]
-                     [actual-row (if flip-v (- (- sprite-height 1) sprite-row) sprite-row)]
-                     [actual-col (if flip-h (- 7 sprite-col) sprite-col)]
+              ;; For 8x16, which tile are we in?
+              [tile-for-row
+               (if (= sprite-height 16)
+                   (if (< actual-row 8) base-tile (+ base-tile 1))
+                   base-tile)]
+              [row-in-tile
+               (if (and (= sprite-height 16) (>= actual-row 8))
+                   (- actual-row 8)
+                   actual-row)]
 
-                     ;; For 8x16, determine pattern base and tile
-                     [sprite-pattern-base
-                      (if (= sprite-height 16)
-                          (if (bit? sprite0-tile 0) #x1000 #x0000)
-                          (if (ppu-ctrl-flag? p CTRL-SPRITE-PATTERN) #x1000 #x0000))]
-                     [base-tile
-                      (if (= sprite-height 16)
-                          (bitwise-and sprite0-tile #xFE)
-                          sprite0-tile)]
+              ;; Get sprite pixel value
+              [sprite-pixels (decode-tile-row tile-for-row row-in-tile
+                                              sprite-pattern-base ppu-read)]
+              [sprite-pixel (vector-ref sprite-pixels actual-col)])
 
-                     ;; For 8x16, which tile are we in?
-                     [tile-for-row
-                      (if (= sprite-height 16)
-                          (if (< actual-row 8) base-tile (+ base-tile 1))
-                          base-tile)]
-                     [row-in-tile
-                      (if (and (= sprite-height 16) (>= actual-row 8))
-                          (- actual-row 8)
-                          actual-row)]
+         ;; Check if sprite pixel is opaque
+         (and (not (= sprite-pixel 0))
 
-                     ;; Get sprite pixel value
-                     [sprite-pixels (decode-tile-row tile-for-row row-in-tile
-                                                     sprite-pattern-base ppu-read)]
-                     [sprite-pixel (vector-ref sprite-pixels actual-col)])
+              ;; Now check background pixel
+              ;; Get scroll position from v and x registers
+              (let* ([v (ppu-v p)]
+                     [fine-x (ppu-x p)]
+                     [coarse-x-start (v-coarse-x v)]
+                     [coarse-y-start (v-coarse-y v)]
+                     [fine-y-start (v-fine-y v)]
+                     [nt-select (v-nametable v)]
+                     [scroll-x (+ (* coarse-x-start 8) fine-x)]
+                     [scroll-y (+ (* coarse-y-start 8) fine-y-start)]
 
-                ;; Check if sprite pixel is opaque
-                (and (not (= sprite-pixel 0))
+                     ;; Virtual position in nametable space
+                     [virt-x (+ x scroll-x)]
+                     [virt-y (+ scanline scroll-y)]
 
-                     ;; Now check background pixel
-                     ;; Get scroll position from v and x registers
-                     (let* ([v (ppu-v p)]
-                            [fine-x (ppu-x p)]
-                            [coarse-x-start (v-coarse-x v)]
-                            [coarse-y-start (v-coarse-y v)]
-                            [fine-y-start (v-fine-y v)]
-                            [nt-select (v-nametable v)]
-                            [scroll-x (+ (* coarse-x-start 8) fine-x)]
-                            [scroll-y (+ (* coarse-y-start 8) fine-y-start)]
+                     ;; Which nametable
+                     [nt-h (if (>= virt-x 256) 1 0)]
+                     [nt-v (if (>= virt-y 240) 1 0)]
+                     [nt (bitwise-xor nt-select
+                                      (bitwise-ior nt-h (arithmetic-shift nt-v 1)))]
+                     [nametable-base (nametable-base-addr nt)]
 
-                            ;; Virtual position in nametable space
-                            [virt-x (+ x scroll-x)]
-                            [virt-y (+ scanline scroll-y)]
+                     ;; Position within nametable
+                     [nt-x (remainder virt-x 256)]
+                     [nt-y (remainder virt-y 240)]
 
-                            ;; Which nametable
-                            [nt-h (if (>= virt-x 256) 1 0)]
-                            [nt-v (if (>= virt-y 240) 1 0)]
-                            [nt (bitwise-xor nt-select
-                                             (bitwise-ior nt-h (arithmetic-shift nt-v 1)))]
-                            [nametable-base (nametable-base-addr nt)]
+                     ;; Tile coordinates
+                     [tile-x (quotient nt-x 8)]
+                     [tile-y (quotient nt-y 8)]
+                     [fine-x-pixel (remainder nt-x 8)]
+                     [fine-y-pixel (remainder nt-y 8)]
 
-                            ;; Position within nametable
-                            [nt-x (remainder virt-x 256)]
-                            [nt-y (remainder virt-y 240)]
+                     ;; Get tile index from nametable
+                     [nt-addr (+ nametable-base (* tile-y TILES-PER-ROW) tile-x)]
+                     [tile-index (ppu-read nt-addr)]
 
-                            ;; Tile coordinates
-                            [tile-x (quotient nt-x 8)]
-                            [tile-y (quotient nt-y 8)]
-                            [fine-x-pixel (remainder nt-x 8)]
-                            [fine-y-pixel (remainder nt-y 8)]
+                     ;; Get background pattern
+                     [bg-pattern-base
+                      (if (ppu-ctrl-flag? p CTRL-BG-PATTERN) #x1000 #x0000)]
+                     [bg-pixels (decode-tile-row tile-index fine-y-pixel
+                                                 bg-pattern-base ppu-read)]
+                     [bg-pixel (vector-ref bg-pixels fine-x-pixel)])
 
-                            ;; Get tile index from nametable
-                            [nt-addr (+ nametable-base (* tile-y TILES-PER-ROW) tile-x)]
-                            [tile-index (ppu-read nt-addr)]
-
-                            ;; Get background pattern
-                            [bg-pattern-base
-                             (if (ppu-ctrl-flag? p CTRL-BG-PATTERN) #x1000 #x0000)]
-                            [bg-pixels (decode-tile-row tile-index fine-y-pixel
-                                                        bg-pattern-base ppu-read)]
-                            [bg-pixel (vector-ref bg-pixels fine-x-pixel)])
-
-                       ;; Hit if background pixel is also opaque
-                       (not (= bg-pixel 0)))))))))
+                ;; Hit if background pixel is also opaque
+                (not (= bg-pixel 0)))))))
 
 ;; ============================================================================
 ;; Pattern Table Decoding
 ;; ============================================================================
 
-;; Decode one row of a tile from pattern table
-;; Returns a vector of 8 2-bit pixel values (0-3)
+;; Preallocated pixel buffer to avoid allocation in hot path
+;; Used by decode-tile-row! for in-place decoding
+(define shared-pixel-buffer (make-vector 8 0))
+
+;; Decode one row of a tile from pattern table into provided buffer
+;; pixels: vector of 8 elements to fill with 2-bit pixel values (0-3)
 ;; tile-index: 0-255 tile number
 ;; row: 0-7 row within tile
 ;; pattern-base: $0000 or $1000
 ;; ppu-read: function to read from PPU bus
-(define (decode-tile-row tile-index row pattern-base ppu-read)
+(define (decode-tile-row! pixels tile-index row pattern-base ppu-read)
   ;; Each tile is 16 bytes: 8 bytes for low plane, 8 bytes for high plane
   ;; Planes are interleaved: low byte, then high byte 8 bytes later
   (define tile-addr (+ pattern-base (* tile-index 16)))
@@ -249,13 +261,22 @@
   (define high-byte (ppu-read (+ tile-addr row 8)))
 
   ;; Decode 8 pixels from the two planes
-  (define pixels (make-vector 8 0))
   (for ([x (in-range 8)])
     (define bit-pos (- 7 x))  ; MSB is leftmost pixel
     (define low-bit (if (bit? low-byte bit-pos) 1 0))
     (define high-bit (if (bit? high-byte bit-pos) 1 0))
-    (vector-set! pixels x (bitwise-ior low-bit (arithmetic-shift high-bit 1))))
+    (vector-set! pixels x (bitwise-ior low-bit (arithmetic-shift high-bit 1)))))
 
+;; Decode one row of a tile from pattern table
+;; Returns a vector of 8 2-bit pixel values (0-3)
+;; NOTE: This allocates a fresh vector - prefer decode-tile-row! in hot paths
+;; tile-index: 0-255 tile number
+;; row: 0-7 row within tile
+;; pattern-base: $0000 or $1000
+;; ppu-read: function to read from PPU bus
+(define (decode-tile-row tile-index row pattern-base ppu-read)
+  (define pixels (make-vector 8 0))
+  (decode-tile-row! pixels tile-index row pattern-base ppu-read)
   pixels)
 
 ;; ============================================================================
@@ -329,6 +350,9 @@
   (define sprite-height
     (if (ppu-ctrl-flag? p CTRL-SPRITE-SIZE) 16 8))
 
+  ;; Preallocate pixel buffer for tile decoding
+  (define pixels (make-vector 8 0))
+
   ;; Render sprites in reverse order (sprite 0 has highest priority)
   ;; This means we render 63->0 so sprite 0 ends up on top
   (for ([sprite-num (in-range (- NUM-SPRITES 1) -1 -1)])
@@ -370,8 +394,8 @@
                   (values (+ base-tile 1) (- actual-row 8)))
               (values base-tile actual-row)))
 
-        (define pixels (decode-tile-row tile-for-row row-in-tile
-                                        actual-pattern-base ppu-read))
+        (decode-tile-row! pixels tile-for-row row-in-tile
+                          actual-pattern-base ppu-read)
 
         ;; Calculate screen Y for this row
         (define pixel-y (+ screen-y row))
@@ -454,12 +478,16 @@
 
 ;; Internal: render background while tracking which pixels are opaque
 ;; Uses per-scanline scroll capture for proper mid-frame scroll changes
+;; Optimized: decodes tiles once per 8-pixel span instead of per-pixel
 (define (render-background-with-opacity! p pbus framebuffer bg-opaque)
   (define ppu-read (λ (addr) (ppu-bus-read pbus addr)))
 
   ;; Get pattern table address from PPUCTRL
   (define bg-pattern-base
     (if (ppu-ctrl-flag? p CTRL-BG-PATTERN) #x1000 #x0000))
+
+  ;; Preallocate pixel buffer for tile decoding
+  (define pixels (make-vector 8 0))
 
   ;; Render each scanline using its captured scroll state
   (for ([screen-y (in-range VISIBLE-HEIGHT)])
@@ -475,17 +503,27 @@
     (define scroll-x (+ (* coarse-x-start 8) fine-x))
     (define scroll-y (+ (* coarse-y-start 8) fine-y-start))
 
+    ;; Virtual Y is constant for this scanline
+    (define virt-y (+ screen-y scroll-y))
+    (define nt-v (if (>= virt-y 240) 1 0))
+    (define nt-y (remainder virt-y 240))
+    (define tile-y (quotient nt-y 8))
+    (define fine-y-pixel (remainder nt-y 8))
+
+    ;; Framebuffer row base offset
+    (define row-base (* screen-y VISIBLE-WIDTH))
+
+    ;; Track last decoded tile to avoid re-decoding
+    (define last-tile-key #f)  ; (cons nametable-base tile-x)
+    (define last-palette-index 0)
+
     ;; Render each pixel in this scanline
     (for ([screen-x (in-range VISIBLE-WIDTH)])
       ;; Calculate which pixel in the virtual 512x480 nametable space
       (define virt-x (+ screen-x scroll-x))
-      (define virt-y (+ screen-y scroll-y))
 
       ;; Calculate which nametable (0-3) based on position
-      ;; Horizontal: 0/1 in left half, 2/3 in right half (if x >= 256)
-      ;; Vertical: 0/2 in top half, 1/3 in bottom half (if y >= 240)
       (define nt-h (if (>= virt-x 256) 1 0))
-      (define nt-v (if (>= virt-y 240) 1 0))
 
       ;; XOR with base nametable select for proper mirroring behavior
       (define nt (bitwise-xor nt-select
@@ -494,32 +532,33 @@
 
       ;; Position within nametable (0-255, 0-239)
       (define nt-x (remainder virt-x 256))
-      (define nt-y (remainder virt-y 240))
 
       ;; Tile coordinates
       (define tile-x (quotient nt-x 8))
-      (define tile-y (quotient nt-y 8))
       (define fine-x-pixel (remainder nt-x 8))
-      (define fine-y-pixel (remainder nt-y 8))
 
-      ;; Get tile index from nametable
-      (define nt-addr (+ nametable-base (* tile-y TILES-PER-ROW) tile-x))
-      (define tile-index (ppu-read nt-addr))
+      ;; Check if we need to decode a new tile
+      (define tile-key (+ (* nametable-base 64) tile-x))
+      (unless (equal? last-tile-key tile-key)
+        (set! last-tile-key tile-key)
+        ;; Get tile index from nametable
+        (define nt-addr (+ nametable-base (* tile-y TILES-PER-ROW) tile-x))
+        (define tile-index (ppu-read nt-addr))
+        ;; Decode tile row into preallocated buffer
+        (decode-tile-row! pixels tile-index fine-y-pixel bg-pattern-base ppu-read)
+        ;; Get palette for this tile (changes per 2x2 tile region)
+        (set! last-palette-index (get-attribute-palette tile-x tile-y nametable-base ppu-read)))
 
-      ;; Get palette for this tile
-      (define palette-index (get-attribute-palette tile-x tile-y nametable-base ppu-read))
-
-      ;; Get pixel value from tile
-      (define pixels (decode-tile-row tile-index fine-y-pixel bg-pattern-base ppu-read))
+      ;; Get pixel value from cached tile
       (define pixel-value (vector-ref pixels fine-x-pixel))
-      (define color-index (get-tile-pixel palette-index pixel-value ppu-read))
+      (define color-index (get-tile-pixel last-palette-index pixel-value ppu-read))
 
       ;; Look up actual RGB color
       (define-values (r g b) (nes-palette-ref color-index))
 
       ;; Calculate framebuffer position
-      (define fb-offset (* (+ (* screen-y VISIBLE-WIDTH) screen-x) BYTES-PER-PIXEL))
-      (define opacity-offset (+ (* screen-y VISIBLE-WIDTH) screen-x))
+      (define fb-offset (* (+ row-base screen-x) BYTES-PER-PIXEL))
+      (define opacity-offset (+ row-base screen-x))
 
       ;; Track opacity (pixel-value 0 = transparent)
       (bytes-set! bg-opaque opacity-offset (if (= pixel-value 0) 0 1))
