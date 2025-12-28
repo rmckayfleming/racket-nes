@@ -16,6 +16,8 @@ compiled/
 # Test ROMs (keep only the gitignore and README)
 test/roms/*.nes
 test/roms/*.NES
+test/roms/nes-test-roms/
+test/roms/nes-audio-tests/
 
 # Save files
 *.sav
@@ -33,6 +35,9 @@ test/roms/*.NES
 .idea/
 *.swp
 *.swo
+
+# Claude Code
+.claude/
 
 # macOS
 .DS_Store
