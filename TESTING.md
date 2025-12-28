@@ -104,25 +104,25 @@ Tests that crash with an illegal opcode while status is still `$80` are treated 
 
 | Category | Passed | Failed |
 |----------|--------|--------|
-| CPU      | 5      | 22     |
+| CPU      | 13     | 14     |
 | PPU      | 2      | 8      |
 | APU      | 3      | 5      |
 | Mappers  | 1      | 5      |
-| **Total**| **11** | **40** |
+| **Total**| **19** | **32** |
 
 ### CPU Tests (instr_test-v5)
 
 | Test | Status | Notes |
 |------|--------|-------|
 | 01-basics.nes | PASS | |
-| 02-implied.nes | FAIL | Crashes during test |
-| 03-immediate.nes | FAIL | Crashes during test |
-| 04-zero_page.nes | FAIL | Crashes during test |
-| 05-zp_xy.nes | FAIL | Crashes during test |
-| 06-absolute.nes | FAIL | Crashes during test |
-| 07-abs_xy.nes | FAIL | Crashes during test |
-| 08-ind_x.nes | FAIL | Crashes during test |
-| 09-ind_y.nes | FAIL | Crashes during test |
+| 02-implied.nes | PASS | |
+| 03-immediate.nes | PASS | |
+| 04-zero_page.nes | PASS | |
+| 05-zp_xy.nes | PASS | |
+| 06-absolute.nes | PASS | |
+| 07-abs_xy.nes | PASS | |
+| 08-ind_x.nes | PASS | |
+| 09-ind_y.nes | PASS | |
 | 10-branches.nes | FAIL | BCC instruction |
 | 11-stack.nes | FAIL | PHA instruction |
 | 12-jmp_jsr.nes | FAIL | JMP instruction |
@@ -185,13 +185,12 @@ Some older test ROMs don't use the Blargg `$6000` protocol and require visual in
 
 ## Known Issues
 
-1. **CPU addressing mode bugs** — Tests 02-09 crash, indicating bugs in implied/immediate/zero page/absolute/indirect addressing
-2. **Branch/Stack instructions** — Tests 10-14 fail (BCC, PHA, JMP, RTS, RTI)
-3. **NMI timing** — NMI occurs one instruction too early
-4. **Odd frame skip** — Clock skip timing relative to BG enable is wrong
-5. **APU timing** — Frame IRQ and length counter timing off
-6. **DMC** — Buffer/rate implementation needs work
-7. **MMC3 IRQ** — Scanline counter not working correctly
+1. **Branch/Stack instructions** — Tests 10-14 fail (BCC, PHA, JMP, RTS, RTI)
+2. **NMI timing** — NMI occurs one instruction too early
+3. **Odd frame skip** — Clock skip timing relative to BG enable is wrong
+4. **APU timing** — Frame IRQ and length counter timing off
+5. **DMC** — Buffer/rate implementation needs work
+6. **MMC3 IRQ** — Scanline counter not working correctly
 
 ## Adding New Tests
 
