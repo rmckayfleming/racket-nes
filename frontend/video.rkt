@@ -68,8 +68,10 @@
 ;; Create a new video system
 ;; #:scale - Integer scale factor (default: 2)
 ;; #:title - Window title
+;; #:vsync - Enable vsync for frame pacing (default: #t)
 (define (make-video #:scale [scale 2]
-                    #:title [title "NES Emulator"])
+                    #:title [title "NES Emulator"]
+                    #:vsync [vsync #t])
   ;; Initialize SDL video
   (sdl-init! 'video)
 
@@ -81,6 +83,11 @@
   (define-values (win rend)
     (make-window+renderer title win-width win-height
                           #:window-flags 'resizable))
+
+  ;; Enable vsync if requested - this makes render-present! block until
+  ;; the next display refresh, providing natural ~60fps frame pacing
+  (when vsync
+    (set-render-vsync! rend 1))
 
   ;; Create streaming texture for efficient updates
   ;; Use ABGR8888 format because our framebuffer stores bytes as [R,G,B,A]

@@ -308,13 +308,9 @@
           ;; Track frame count
           (set! frames-rendered (+ frames-rendered 1))
 
-          ;; Audio sync: wait if we have too much audio buffered
-          ;; This provides natural frame pacing tied to audio playback
-          ;; Target: ~3 frames worth of audio (50ms at 44.1kHz = ~8820 bytes)
-          (let wait-loop ()
-            (when (> (audio-available aud) 8820)
-              (sleep 0.001)  ; Sleep 1ms
-              (wait-loop)))
+          ;; Frame pacing is handled by vsync - video-present! blocks until
+          ;; the next display refresh (~16.67ms at 60Hz). Audio is generated
+          ;; as a side effect of emulation and should stay in sync naturally.
 
           ;; Check frame limit and continue
           (define hit-limit? (and (frame-limit) (>= frames-rendered (frame-limit))))
