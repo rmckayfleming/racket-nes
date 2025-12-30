@@ -83,6 +83,7 @@
    total-cycles-box ; Total CPU cycles executed
    trace-box        ; Trace output enabled?
    dma-stall-box    ; DMA stall cycles pending
+   dma-pending-box  ; OAM DMA triggered this instruction (calculate stall after instr completes)
    prev-nmi-box     ; Previous NMI line state (for edge detection)
    nmi-delay-box    ; Delay counter for software-triggered NMI (0=none, 1=fire after next instr)
    audio-callback-box) ; Audio sample callback (sample cycles -> void)
@@ -146,17 +147,17 @@
 
   ;; DMA stall box (shared for DMA handler to set)
   (define dma-stall-box (box 0))
+  ;; DMA pending flag - set when $4014 write occurs, stall calculated after instruction
+  (define dma-pending-box (box #f))
 
   ;; Connect DMA handler
   (nes-memory-set-dma-write! mem
     (λ (page)
-      ;; Perform the DMA transfer
+      ;; Perform the DMA transfer immediately
       (oam-dma-transfer! page (λ (addr) (bus-read bus addr)) p)
-      ;; Calculate and set stall cycles
-      ;; Use CPU cycles at time of DMA trigger (not including pending stalls)
-      ;; The DMA takes 513 or 514 cycles depending on odd/even alignment
-      (set-box! dma-stall-box (+ (unbox dma-stall-box)
-                                  (oam-dma-cycles (cpu-cycles cpu))))))
+      ;; Mark DMA as pending - stall cycles will be calculated in nes-step!
+      ;; after the instruction completes, when we know the correct cycle alignment
+      (set-box! dma-pending-box #t)))
 
   ;; Create controllers
   (define ctrl1 (make-controller))
@@ -204,6 +205,7 @@
          (box 0)          ; total cycles
          (box #f)         ; trace disabled
          dma-stall-box
+         dma-pending-box
          prev-nmi-box
          nmi-delay-box
          (box #f)))       ; audio callback (disabled by default)
@@ -287,6 +289,15 @@
         ;; Calculate cycles consumed
         (define cycles-after (cpu-cycles cpu))
         (define cycles (- cycles-after cycles-before))
+
+        ;; Handle OAM DMA stall if triggered during this instruction
+        ;; DMA alignment is based on the cycle count AFTER the instruction completes
+        ;; (DMA starts on the next cycle after the write to $4014)
+        (when (unbox (nes-dma-pending-box sys))
+          (set-box! (nes-dma-pending-box sys) #f)
+          (set-box! (nes-dma-stall-box sys)
+                    (+ (unbox (nes-dma-stall-box sys))
+                       (oam-dma-cycles cycles-after))))
 
         ;; Update total cycles
         (set-box! (nes-total-cycles-box sys)
@@ -547,6 +558,13 @@
         (define cycles-after (cpu-cycles cpu))
         (define cycles (- cycles-after cycles-before))
 
+        ;; Handle OAM DMA stall if triggered during this instruction
+        (when (unbox (nes-dma-pending-box sys))
+          (set-box! (nes-dma-pending-box sys) #f)
+          (set-box! (nes-dma-stall-box sys)
+                    (+ (unbox (nes-dma-stall-box sys))
+                       (oam-dma-cycles cycles-after))))
+
         ;; Update total cycles
         (set-box! (nes-total-cycles-box sys)
                   (+ (unbox (nes-total-cycles-box sys)) cycles))
@@ -612,6 +630,7 @@
   (set-box! (nes-frame-count-box sys) 0)
   (set-box! (nes-total-cycles-box sys) (cpu-cycles cpu))
   (set-box! (nes-dma-stall-box sys) 0)
+  (set-box! (nes-dma-pending-box sys) #f)
   (set-box! (nes-prev-nmi-box sys) #f)
   (set-box! (nes-nmi-delay-box sys) 0))
 
@@ -750,10 +769,11 @@
     (define cycles-before (nes-total-cycles sys))
 
     ;; Trigger OAM DMA by writing to $4014
+    ;; Note: DMA handler sets dma-pending, stall cycles are calculated in nes-step!
     (bus-write bus #x4014 #x02)
 
-    ;; DMA should have set stall cycles
-    (check-true (> (unbox (nes-dma-stall-box sys)) 0))
+    ;; DMA pending flag should be set (stall calculated after instruction)
+    (check-true (unbox (nes-dma-pending-box sys)))
 
     ;; Run enough steps to consume DMA stall cycles
     (for ([_ (in-range 520)])  ; More than 514 cycles
@@ -775,6 +795,12 @@
 
     ;; Trigger DMA (starting cycles determine 513 vs 514)
     (bus-write bus #x4014 #x00)
+
+    ;; DMA pending should be set
+    (check-true (unbox (nes-dma-pending-box sys)))
+
+    ;; Run one step to process pending DMA and calculate stall
+    (nes-step! sys)
 
     ;; Check that stall cycles are in expected range
     (define stall (unbox (nes-dma-stall-box sys)))

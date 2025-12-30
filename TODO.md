@@ -4,13 +4,6 @@ Architectural issues and improvements for the NES emulator.
 
 ## Critical
 
-### DMA Stall Alignment Bug
-**Location:** `nes/system.rkt:160-161`
-
-DMA stall calculation uses `(cpu-cycles cpu)` which is the total lifetime cycle count, not the cycle position within the current instruction. The odd/even alignment for the extra stall cycle is wrong.
-
-**Fix:** Use `(modulo (cpu-cycles cpu) 2)` or track cycle position within instruction separately.
-
 ### MMC3 Scanline IRQ Not Implemented
 **Location:** No implementation exists
 
