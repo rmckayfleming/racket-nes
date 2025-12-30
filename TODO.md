@@ -32,13 +32,6 @@ The "Mode A" scheduler ticks PPU/APU only after entire CPU instructions complete
 
 **Fix:** Extract shared logic into common function, or document that fast mode may diverge.
 
-### Renderer Ignores Scroll Registers
-**Location:** `nes/ppu/render.rkt`
-
-The renderer doesn't use PPU's v/t/x scroll registers. `ppu-capture-scanline-scroll!` is called during PPU tick but the captured values aren't used by the renderer.
-
-**Fix:** Update renderer to use captured scroll values for each scanline.
-
 ### Sprite Overflow Never Set
 **Location:** `nes/system.rkt:377`
 
