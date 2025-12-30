@@ -301,14 +301,44 @@
 ;; ============================================================================
 
 ;; Frame counter step timing (in APU cycles = CPU cycles)
-;; Mode 0 (4-step): steps at 3728.5, 7456.5, 11185.5, 14914.5 then reset
-;; Mode 1 (5-step): steps at 3728.5, 7456.5, 11185.5, 14914.5, 18640.5 then reset
 ;;
-;; We use integer approximations: 3729, 7457, 11186, 14915, 18641
-;; (The .5 cycles are handled by the CPU/APU alignment)
+;; The frame counter steps happen at specific cycle counts relative to $4017 write.
+;; These are the cycle counts when each step fires:
+;;
+;; Mode 0 (4-step):
+;;   Step 0 (quarter):     3728 cycles
+;;   Step 1 (quarter+half): 7456 cycles
+;;   Step 2 (quarter):     11185 cycles
+;;   Step 3 (quarter+half+IRQ): 14914 cycles, then reset at 14915
+;;
+;; Mode 1 (5-step):
+;;   Step 0: 3728, Step 1: 7456, Step 2: 11185, Step 3: 14914, Step 4: 18640
+;;   Then reset at 18641
+;;
+;; In 4-step mode, the IRQ flag is also set on cycles 14914, 0, and 1.
+;; Reference: https://www.nesdev.org/wiki/APU_Frame_Counter
 
-(define FRAME-STEP-CYCLES-4STEP (vector 3729 7457 11186 14915))
-(define FRAME-STEP-CYCLES-5STEP (vector 3729 7457 11186 14915 18641))
+;; Frame counter step timings in CPU cycles
+;; The APU frame counter is clocked at CPU rate, and steps happen at:
+;;
+;; Mode 0 (4-step):
+;;   Step 0 (quarter):     7457 cycles
+;;   Step 1 (quarter+half): 14913 cycles
+;;   Step 2 (quarter):     22371 cycles
+;;   Step 3 (quarter+half+IRQ): 29829 cycles, then reset
+;;
+;; Mode 1 (5-step):
+;;   Same as mode 0 for steps 0-3, plus step 4 at 37281
+;;
+;; IRQ flag is set on step 3 in mode 0 only.
+;; Reference: https://www.nesdev.org/wiki/APU_Frame_Counter
+
+(define FRAME-STEP-CYCLES-4STEP (vector 7457 14913 22371 29829))
+(define FRAME-STEP-CYCLES-5STEP (vector 7457 14913 22371 29829 37281))
+
+;; Frame length (cycle count before reset)
+(define FRAME-LENGTH-4STEP 29830)
+(define FRAME-LENGTH-5STEP 37282)
 
 ;; What happens at each step:
 ;; Step 0: Clock envelopes and triangle linear counter
@@ -847,6 +877,7 @@
   (define step-cycles
     (if (= mode 0) FRAME-STEP-CYCLES-4STEP FRAME-STEP-CYCLES-5STEP))
   (define max-steps (if (= mode 0) 4 5))
+  (define frame-length (if (= mode 0) FRAME-LENGTH-4STEP FRAME-LENGTH-5STEP))
 
   ;; Process each cycle
   (for ([_ (in-range cycles)])
@@ -873,12 +904,9 @@
     (define current-cycle (unbox (apu-frame-cycle-box ap)))
     (define current-step (unbox (apu-frame-counter-box ap)))
 
-    ;; Advance cycle counter
-    (set-box! (apu-frame-cycle-box ap) (add1 current-cycle))
-
     ;; Check if we've reached a step boundary
     (when (and (< current-step max-steps)
-               (>= (add1 current-cycle) (vector-ref step-cycles current-step)))
+               (= current-cycle (vector-ref step-cycles current-step)))
 
       ;; Execute step actions
       (case current-step
@@ -895,7 +923,7 @@
         [(3)  ; Step 4
          (cond
            [(= mode 0)
-            ;; 4-step mode: quarter + half frame + IRQ
+            ;; 4-step mode: quarter + half frame + set IRQ
             (clock-quarter-frame! ap)
             (clock-half-frame! ap)
             (unless (unbox (apu-frame-irq-inhibit-box ap))
@@ -909,12 +937,20 @@
          (clock-half-frame! ap)])
 
       ;; Advance to next step
-      (set-box! (apu-frame-counter-box ap) (add1 current-step))
+      (set-box! (apu-frame-counter-box ap) (add1 current-step)))
 
-      ;; Reset if we've completed the sequence
-      (when (>= (add1 current-step) max-steps)
-        (set-box! (apu-frame-counter-box ap) 0)
-        (set-box! (apu-frame-cycle-box ap) 0)))))
+    ;; Advance cycle counter
+    (set-box! (apu-frame-cycle-box ap) (add1 current-cycle))
+
+    ;; Reset frame counter if we've reached the frame length
+    ;; In 4-step mode, also set IRQ on wrap (cycles 0 and 1 of next frame)
+    (when (>= (unbox (apu-frame-cycle-box ap)) frame-length)
+      ;; Set IRQ again at frame wrap in 4-step mode
+      (when (and (= mode 0)
+                 (not (unbox (apu-frame-irq-inhibit-box ap))))
+        (set-box! (apu-frame-irq-pending-box ap) #t))
+      (set-box! (apu-frame-counter-box ap) 0)
+      (set-box! (apu-frame-cycle-box ap) 0))))
 
 ;; ============================================================================
 ;; IRQ Interface
@@ -1132,8 +1168,8 @@
     (apu-write! ap #x4017 #x00)
     (check-false (apu-frame-irq-pending? ap))
 
-    ;; Tick through one full frame (approximately 14915 cycles)
-    (apu-tick! ap 14915)
+    ;; Tick through one full frame (29830 cycles for 4-step mode)
+    (apu-tick! ap 29830)
 
     ;; Frame IRQ should be pending
     (check-true (apu-frame-irq-pending? ap))
@@ -1160,8 +1196,8 @@
     ;; Set 4-step mode with IRQ inhibit
     (apu-write! ap #x4017 #x40)
 
-    ;; Tick through one full frame
-    (apu-tick! ap 14915)
+    ;; Tick through one full frame (29830 cycles for 4-step mode)
+    (apu-tick! ap 29830)
 
     ;; Frame IRQ should NOT be pending (inhibited)
     (check-false (apu-frame-irq-pending? ap)))

@@ -511,12 +511,21 @@
 ;; ============================================================================
 ;; Fast Execution (Headless Mode)
 ;; ============================================================================
-;; These functions skip expensive PPU operations (sprite 0 hit, scroll capture)
-;; and APU audio processing. Only basic VBlank/NMI timing is maintained.
-;; Use for test automation where cycle-accurate PPU emulation isn't needed.
+;; These functions intentionally skip expensive PPU operations for speed.
+;; Use for test automation, CPU validation, and headless operation.
+;;
+;; ppu-tick-fast! vs ppu-tick! differences (by design):
+;; - Skips odd frame cycle skip (minor timing difference)
+;; - Skips scroll register copying at cycles 257, 280-304 (no visual output)
+;; - Skips scanline scroll capture (no rendering)
+;; - Skips sprite 0 hit detection (games relying on this will break)
+;; - Skips sprite overflow detection (rarely used by games)
+;; - Skips mapper scanline tick (MMC3 IRQ won't work)
+;;
+;; Games that need sprite 0 hit, MMC3 IRQ, or mid-frame scroll effects
+;; must use the full nes-step!/ppu-tick! path.
 
 ;; Fast PPU tick - only updates position and triggers VBlank/NMI
-;; Skips: sprite 0 hit, scroll register copying, scanline scroll capture
 (define (ppu-tick-fast! sys ppu-cycles)
   (define p (nes-ppu sys))
 

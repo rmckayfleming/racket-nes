@@ -22,25 +22,18 @@ The "Mode A" scheduler ticks PPU/APU only after entire CPU instructions complete
 
 ## Medium Priority
 
-### Two PPU Tick Functions Diverge
-**Location:** `nes/system.rkt:339-448` vs `nes/system.rkt:470-509`
-
-`ppu-tick!` and `ppu-tick-fast!` have different behavior:
-- Fast mode skips sprite 0 hit detection
-- Fast mode skips scroll register copying (cycles 280-304)
-- Fast mode skips scanline scroll capture
-
-**Fix:** Extract shared logic into common function, or document that fast mode may diverge.
-
 ### APU Frame Counter Timing
 **Location:** `nes/apu/apu.rkt`
 
-Implementation exists but 7/8 APU tests fail. Likely issues:
-- Off-by-one errors in cycle counting
-- Frame IRQ timing wrong
-- DMC stall integration buggy
+Updated frame counter timing to use correct CPU cycle values (7457, 14913, 22371, 29829 for 4-step mode). However, 6/8 APU tests still fail. Remaining issues:
+- $4017 write delay (3-4 cycles before reset takes effect) not implemented
+- Length counter timing may be off by a few cycles
+- DMC sample fetch and playback timing needs work
 
-**Fix:** Debug against blargg's APU tests, fix timing issues.
+Tests passing: 2-len_table.nes (length lookup table is correct)
+Tests failing: Timing-sensitive tests that require cycle-exact precision
+
+**Fix:** Implement $4017 write delay, audit cycle-by-cycle timing against blargg test documentation.
 
 ## Low Priority
 
