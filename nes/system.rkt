@@ -360,6 +360,10 @@
         (when (apu-irq-pending? (nes-apu sys))
           (set-cpu-irq-pending! cpu #t))
 
+        ;; Check for mapper IRQ (e.g., MMC3 scanline counter)
+        (when ((mapper-irq-pending? (nes-mapper sys)))
+          (set-cpu-irq-pending! cpu #t))
+
         cycles)))
 
 ;; Advance PPU by the given number of PPU cycles
@@ -450,7 +454,17 @@
                  (not (ppu-sprite0-hit? p)))  ; Not already hit
         (define x (- cycle 1))  ; X position is cycle - 1
         (when (check-sprite0-hit? p pbus scanline x)
-          (set-ppu-sprite0-hit! p #t))))
+          (set-ppu-sprite0-hit! p #t)))
+
+      ;; MMC3 scanline counter tick
+      ;; Called at cycle 260 of visible scanlines (0-239) and pre-render (261)
+      ;; This is when the PPU fetches sprites, causing A12 to rise on pattern table access
+      ;; Reference: https://www.nesdev.org/wiki/MMC3#Scanline_counter
+      (when (and (= cycle 260)
+                 (or (< scanline VISIBLE-HEIGHT)
+                     (= scanline SCANLINE-PRE-RENDER))
+                 rendering-enabled?)
+        ((mapper-scanline-tick! (nes-mapper sys)))))
 
     ;; Advance position (always advance by 1, skip is handled by skipping logic)
     (define next-cycle (+ cycle 1))

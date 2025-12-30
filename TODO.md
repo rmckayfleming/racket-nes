@@ -2,18 +2,6 @@
 
 Architectural issues and improvements for the NES emulator.
 
-## Critical
-
-### MMC3 Scanline IRQ Not Implemented
-**Location:** No implementation exists
-
-The mapper interface has a `scanline-tick!` callback but:
-- Nothing in the system calls it
-- No scanline-event trigger mechanism exists
-- PPU doesn't notify mappers on scanline boundaries
-
-**Fix:** Add scanline event system - call mapper's `scanline-tick!` at cycle 260 of each visible scanline (when PPU fetches sprites).
-
 ## High Priority
 
 ### Open Bus Not Implemented
@@ -111,7 +99,7 @@ Current test results from TESTING.md:
 | CPU | 16 | 16 | All official opcodes pass |
 | PPU | 3 | 10 | VBlank/NMI timing tests need cycle-level precision |
 | APU | 1 | 8 | Frame counter, channels broken |
-| Mappers | 1 | 6 | MMC3 IRQ not implemented |
+| Mappers | 1 | 6 | MMC3 IRQ implemented, tests need re-run |
 
 ## Architecture Notes
 
