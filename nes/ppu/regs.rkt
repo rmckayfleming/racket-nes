@@ -45,17 +45,31 @@
 ;; Read from PPU register (0-7)
 ;; Returns (values byte nmi-changed?)
 ;; nmi-changed? indicates if NMI state may have changed
+;;
+;; Write-only registers return the I/O latch value (last value on PPU data bus).
+;; Reading any register updates the I/O latch with the value read.
+;; Reference: https://www.nesdev.org/wiki/Open_bus_behavior
 (define (ppu-reg-read p reg ppu-bus-read)
-  (case reg
-    [(0) (values 0 #f)]              ; PPUCTRL - write only, returns open bus
-    [(1) (values 0 #f)]              ; PPUMASK - write only, returns open bus
-    [(2) (values (ppu-read-status p) #t)]  ; PPUSTATUS
-    [(3) (values 0 #f)]              ; OAMADDR - write only
-    [(4) (values (ppu-read-oam-data p) #f)] ; OAMDATA
-    [(5) (values 0 #f)]              ; PPUSCROLL - write only
-    [(6) (values 0 #f)]              ; PPUADDR - write only
-    [(7) (values (ppu-read-data p ppu-bus-read) #f)] ; PPUDATA
-    [else (values 0 #f)]))
+  (define latch (ppu-io-latch p))
+  (define-values (result nmi-changed?)
+    (case reg
+      [(0) (values latch #f)]              ; PPUCTRL - write only, returns I/O latch
+      [(1) (values latch #f)]              ; PPUMASK - write only, returns I/O latch
+      [(2)                                 ; PPUSTATUS - bits 7-5 from status, bits 4-0 from latch
+       (define status (ppu-read-status p))
+       ;; Upper 3 bits from status, lower 5 bits from latch
+       (values (bitwise-ior (bitwise-and status #xE0)
+                            (bitwise-and latch #x1F))
+               #t)]
+      [(3) (values latch #f)]              ; OAMADDR - write only, returns I/O latch
+      [(4) (values (ppu-read-oam-data p) #f)] ; OAMDATA
+      [(5) (values latch #f)]              ; PPUSCROLL - write only, returns I/O latch
+      [(6) (values latch #f)]              ; PPUADDR - write only, returns I/O latch
+      [(7) (values (ppu-read-data p ppu-bus-read) #f)] ; PPUDATA
+      [else (values latch #f)]))
+  ;; Update I/O latch with the value being returned
+  (set-ppu-io-latch! p result)
+  (values result nmi-changed?))
 
 ;; ============================================================================
 ;; Register Write
@@ -63,7 +77,10 @@
 
 ;; Write to PPU register (0-7)
 ;; Returns nmi-changed? boolean
+;; All writes update the I/O latch with the value written.
 (define (ppu-reg-write p reg val ppu-bus-write)
+  ;; Update I/O latch with value being written
+  (set-ppu-io-latch! p val)
   (case reg
     [(0) (ppu-write-ctrl p val)]     ; PPUCTRL
     [(1) (ppu-write-mask p val) #f]  ; PPUMASK

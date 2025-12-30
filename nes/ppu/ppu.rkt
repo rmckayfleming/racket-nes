@@ -57,6 +57,10 @@
  ppu-scanline-fine-x
  ppu-capture-scanline-scroll!
 
+ ;; I/O latch (for open bus behavior)
+ ppu-io-latch
+ set-ppu-io-latch!
+
  ;; CTRL register bits
  CTRL-NAMETABLE-X
  CTRL-NAMETABLE-Y
@@ -166,7 +170,12 @@
    ;; This captures the v register at the start of each visible scanline
    ;; so that the renderer can use the correct scroll position
    scanline-scroll-buffer   ; Vector of 240 v-register values
-   scanline-fine-x-buffer)  ; Vector of 240 fine-x values
+   scanline-fine-x-buffer   ; Vector of 240 fine-x values
+
+   ;; I/O data bus latch
+   ;; Updated on every PPU register read/write
+   ;; Returned when reading write-only registers or unused STATUS bits
+   io-latch-box)
   #:transparent)
 
 ;; ============================================================================
@@ -194,7 +203,8 @@
        (box #f)                   ; sprite overflow
        (box #f)                   ; nmi output
        (make-vector 240 0)        ; scanline scroll buffer
-       (make-vector 240 0)))      ; scanline fine-x buffer
+       (make-vector 240 0)        ; scanline fine-x buffer
+       (box 0)))                  ; I/O latch
 
 ;; ============================================================================
 ;; Register Accessors
@@ -265,6 +275,10 @@
   (when (and (>= scanline 0) (< scanline 240))
     (vector-set! (ppu-scanline-scroll-buffer p) scanline (ppu-v p))
     (vector-set! (ppu-scanline-fine-x-buffer p) scanline (ppu-x p))))
+
+;; I/O latch (for open bus behavior on write-only registers)
+(define (ppu-io-latch p) (unbox (ppu-io-latch-box p)))
+(define (set-ppu-io-latch! p v) (set-box! (ppu-io-latch-box p) (u8 v)))
 
 ;; ============================================================================
 ;; Helper Functions

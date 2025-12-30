@@ -4,15 +4,6 @@ Architectural issues and improvements for the NES emulator.
 
 ## High Priority
 
-### Open Bus Not Implemented
-**Location:** `lib/6502/cpu.rkt:85`, `nes/ppu/regs.rkt:50`, `nes/memory.rkt:181`
-
-- CPU has `openbus-box` but the value is never returned from reads
-- PPU register reads that should return open bus return hardcoded `0`
-- $4018-$401F returns `0` instead of open bus
-
-**Fix:** Return `(unbox openbus-box)` for unmapped reads. Update PPU register reads to return open bus for write-only registers.
-
 ### Sprite 0 Hit is Frame-Level
 **Location:** `nes/system.rkt:418-427`
 
