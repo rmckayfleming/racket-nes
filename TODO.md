@@ -1,496 +1,140 @@
-# TODO.md — NES Emulator (Racket + SDL3)
+# TODO.md
 
-This is a *commit-friendly* breakdown of PLAN.md into small, shippable steps. Each item should ideally:
+Architectural issues and improvements for the NES emulator.
 
-* change one behavior or add one new capability
-* include a test (unit test, trace check, screenshot, or test ROM harness)
-* leave the emulator runnable
+## Critical
 
-Legend:
+### DMA Stall Alignment Bug
+**Location:** `nes/system.rkt:160-161`
 
-* [ ] TODO
-* [x] Done
-* (T) add/extend automated test
-* (D) add debug tooling / trace hooks
+DMA stall calculation uses `(cpu-cycles cpu)` which is the total lifetime cycle count, not the cycle position within the current instruction. The odd/even alignment for the extra stall cycle is wrong.
 
----
+**Fix:** Use `(modulo (cpu-cycles cpu) 2)` or track cycle position within instruction separately.
 
-## 0. Repo + Build + Harness (Day 0)
+### MMC3 Scanline IRQ Not Implemented
+**Location:** No implementation exists
 
-* [x] Add `raco`/`racket` entrypoint (`main.rkt`) that:
-  * loads a ROM
-  * constructs `nes/system`
-  * runs for N steps/frames
-  * supports CLI flags: `--rom`, `--headless`, `--steps`, `--frames`, `--trace`, `--screenshot-out`
-* [x] Create `test/harness/run-rom.rkt` (headless runner)
-* [x] Create `test/harness/trace.rkt` (writes trace lines)
-* [x] Create `test/harness/screenshot.rkt` (renders N frames → PNG)
-* [x] Set up `rackunit` test runner target (single `raco test` entry)
-* [x] Add `test/roms/.gitignore` and a README telling how to download ROMs legally + test ROMs
-* [x] Add CI skeleton that runs unit tests and any ROM harnesses that don't require ROM blobs
+The mapper interface has a `scanline-tick!` callback but:
+- Nothing in the system calls it
+- No scanline-event trigger mechanism exists
+- PPU doesn't notify mappers on scanline boundaries
 
----
+**Fix:** Add scanline event system - call mapper's `scanline-tick!` at cycle 260 of each visible scanline (when PPU fetches sprites).
 
-## 1. Shared Utilities
+## High Priority
 
-### 1.1 `lib/bits.rkt`
+### Open Bus Not Implemented
+**Location:** `lib/6502/cpu.rkt:85`, `nes/ppu/regs.rkt:50`, `nes/memory.rkt:181`
 
-* [x] Implement u8/u16 helpers: `u8`, `u16`, `lo`, `hi`, `merge16`, `wrap8`, `wrap16`
-* [x] Implement bit ops: `bit?`, `set-bit`, `clear-bit`, `update-bit`, `mask`, `extract`
-* [x] (T) Unit tests for wrap and bit ops
+- CPU has `openbus-box` but the value is never returned from reads
+- PPU register reads that should return open bus return hardcoded `0`
+- $4018-$401F returns `0` instead of open bus
 
-### 1.2 `lib/bus.rkt` (generic bus)
+**Fix:** Return `(unbox openbus-box)` for unmapped reads. Update PPU register reads to return open bus for write-only registers.
 
-* [x] Define bus struct with ordered handlers: `(start end read write mirror?)`
-* [x] Implement `bus-add-handler!` and `bus-finalize` (optional precompute)
-* [x] Implement `bus-read`, `bus-write` with mirroring support
-* [x] Add a "default read" handler for unmapped addresses
-* [x] (T) Unit tests: overlapping ranges precedence, mirroring, boundary correctness
+### Sprite 0 Hit is Frame-Level
+**Location:** `nes/system.rkt:418-427`
 
-### 1.3 `nes/openbus.rkt`
-
-* [x] Add "last data bus value" state to the NES system (or bus)
-* [x] Add helpers:
+Sprite 0 hit is checked during PPU tick after the full CPU instruction completes. Real hardware checks pixel-by-pixel during rendering.
 
-  * `openbus-read` (returns last)
-  * `openbus-update!` (on reads/writes)
-* [x] Decide convention: which reads/writes update last value (document in code)
-* [x] (T) Unit test basic openbus behavior in isolation
+**Fix:** Integrate sprite 0 hit detection into the renderer, checking at the exact pixel coordinates.
 
-### 1.4 `lib/serde.rkt` (save-state primitives)
+### PPU-CPU Synchronization is Instruction-Grained
+**Location:** `nes/system.rkt:8-15, 252-335`
 
-* [x] Define a stable serialization format (e.g., tagged vectors / bytes)
-* [x] Implement helpers for u8vector/u16 packing
-* [x] Provide `serde-version` and forward-compat note
-* [x] (T) Round-trip tests on synthetic state blobs
-
----
+The "Mode A" scheduler ticks PPU/APU only after entire CPU instructions complete. This means:
+- A 1-cycle NMI delay becomes a 2-7 cycle delay depending on instruction length
+- Mid-instruction PPU state changes cannot be observed by CPU
 
-## 2. Cartridge Parsing + Persistence
+**Fix:** Implement "Mode B" cycle-interleaved scheduler for timing-sensitive games. Keep Mode A as fast path.
 
-### 2.1 iNES/NES2 parsing (`cart/ines.rkt`)
+## Medium Priority
 
-* [x] Parse iNES header (magic, PRG/CHR sizes, flags)
-* [x] Parse mirroring + four-screen + battery flags
-* [x] Detect CHR RAM vs CHR ROM
-* [x] Parse PRG RAM size (best-effort for iNES, more correct for NES2)
-* [x] Validate file size vs declared sizes with helpful error messages
-* [x] (T) Parse 10+ known ROM headers (header-only tests using small fixtures)
+### Two PPU Tick Functions Diverge
+**Location:** `nes/system.rkt:339-448` vs `nes/system.rkt:470-509`
 
-### 2.2 Save RAM (`cart/saves.rkt`)
+`ppu-tick!` and `ppu-tick-fast!` have different behavior:
+- Fast mode skips sprite 0 hit detection
+- Fast mode skips scroll register copying (cycles 280-304)
+- Fast mode skips scanline scroll capture
 
-* [x] Define save path scheme (e.g., `~/.local/share/...` or next to ROM)
-* [x] Load/save PRG RAM if battery flag set
-* [x] (T) Unit test: write PRG RAM → persist → reload
+**Fix:** Extract shared logic into common function, or document that fast mode may diverge.
 
----
+### Renderer Ignores Scroll Registers
+**Location:** `nes/ppu/render.rkt`
 
-## 3. CPU Core (6502 / 2A03)
+The renderer doesn't use PPU's v/t/x scroll registers. `ppu-capture-scanline-scroll!` is called during PPU tick but the captured values aren't used by the renderer.
 
-### 3.1 CPU state + interface (`lib/6502/cpu.rkt`)
+**Fix:** Update renderer to use captured scroll values for each scanline.
 
-* [x] Define CPU registers, flags, cycle counter, interrupt pending flags
-* [x] Implement reset vector fetch + reset behavior
-* [x] Implement stack ops helpers (`push8`, `pull8`, `push16`, `pull16`)
-* [x] Implement flag helpers: `setNZ`, `setC`, etc.
-* [x] Implement bus access wrappers that update openbus (integration point)
-* [x] (T) Micro tests for stack/flags and reset vector
+### Sprite Overflow Never Set
+**Location:** `nes/system.rkt:377`
 
-### 3.2 Addressing modes (`lib/6502/addressing.rkt`)
+`ppu-sprite-overflow?` is cleared on pre-render scanline but never set. The buggy hardware behavior (false positives after 8 sprites) is not implemented.
 
-* [x] Implement all official addressing modes (13) returning:
-  * effective address
-  * page-crossed? boolean (for cycle penalties)
-  * and/or fetched operand (immediate)
-* [x] Implement indexed indirect / indirect indexed correctly (wrap rules)
-* [x] Implement JMP (indirect) page-boundary bug
-* [x] (T) Unit tests for each addressing mode with known vectors
-
-### 3.3 Opcode table DSL (`lib/6502/opcodes.rkt`)
-
-* [x] Implement `define-opcode` macro that can attach:
-  * opcode byte
-  * bytes length
-  * base cycles
-  * optional conditional cycles `#:cycles+`
-  * disasm format
-  * executor body
-* [x] Generate decode table and disasm table from macro expansions
-* [x] Provide `decode` function mapping opcode → executor
-* [x] (T) Smoke test: table contains all expected opcodes, no duplicates
-
-### 3.4 Implement official instruction set
-
-Target: *all official opcodes*, with correct flags.
-
-* [x] ADC/SBC (binary mode only, no decimal)
-* [x] AND/ORA/EOR
-* [x] ASL/LSR/ROL/ROR (incl RMW)
-* [x] Branches (BPL/BMI/BVC/BVS/BCC/BCS/BNE/BEQ)
-* [x] BIT
-* [x] CMP/CPX/CPY
-* [x] DEC/INC (incl RMW)
-* [x] JMP/JSR/RTS/RTI
-* [x] LDA/LDX/LDY
-* [x] STA/STX/STY
-* [x] PHA/PLA/PHP/PLP
-* [x] TAX/TAY/TSX/TXA/TXS/TYA
-* [x] CLC/SEC/CLI/SEI/CLV/CLD/SED (SED should set D flag but D has no effect)
-* [x] NOP
-* [x] BRK interrupt semantics (push PC+2, status with B set in pushed copy)
-
-### 3.5 Cycle timing correctness (Phase 1 critical)
-
-* [x] Add page-cross penalties for relevant ops (loads, compares, etc.)
-* [x] Branch timing:
-  * not taken: +0
-  * taken: +1
-  * taken + page cross: +2 total
-* [x] RMW bus behavior (at least timing-correct at instruction granularity)
-* [x] NMI/IRQ sampling + sequencing (document model)
-
-### 3.6 Disassembler (`lib/6502/disasm.rkt`)
-
-* [x] Use opcode table metadata to format lines
-* [x] Provide `trace-line` matching nestest-style formatting
-* [x] (T) Golden tests for a few known instructions
-
-### 3.7 `nestest` harness (Phase 1 milestone)
-
-* [x] Implement headless run that:
-  * loads `nestest.nes`
-  * sets PC to $C000
-  * steps and compares trace line by line
-* [x] Store reference log in `test/reference/` (not ROM)
-* [x] (T) `test/harness/nestest.rkt` runs and fails at first mismatch with diff context
-* [x] All 5003 official opcode tests pass
-
----
-
-## 4. NES CPU Memory Map + Stubs (enough to run CPU tests)
-
-### 4.1 Core memory map (`nes/memory.rkt`)
-
-* [x] Internal RAM $0000-$07FF + mirrors to $1FFF
-* [x] PPU regs $2000-$2007 + mirrors to $3FFF (stub read/write initially)
-* [x] APU/IO $4000-$4017 (accept writes; stub reads)
-* [x] Test range $4018-$401F (optional; keep as open bus or configurable)
-* [x] Cart space $4020-$FFFF (mapper hooks)
-* [x] (T) Unit tests for mirroring correctness and handler dispatch
-
-### 4.2 Mapper interface + NROM (`nes/mappers/`)
-
-* [x] Mapper interface (`mapper.rkt`) with CPU/PPU read/write, mirroring, IRQ, serialization
-* [x] PRG ROM mapping (16KB mirrored or 32KB)
-* [x] CHR ROM/CHR RAM mapping for PPU bus
-* [x] PRG RAM mapping ($6000-$7FFF)
-* [x] (T) Unit tests for PRG bank mirroring behavior
-
----
-
-## 5. System Scheduler (Mode A first)
-
-### 5.1 `nes/system.rkt`
-
-* [x] Define `nes` struct holding CPU/mapper/memory/counters
-* [x] Implement `step!`:
-  * run 1 CPU instruction
-  * get CPU cycles
-  * (TODO) tick PPU by cycles*3
-  * (TODO) tick APU by cycles
-  * (TODO) apply pending DMA stalls (Phase 7)
-* [x] Implement `run-frame!` placeholder (later becomes PPU-driven)
-* [x] (D) Add trace toggles
-* [x] (T) Unit tests for system creation, stepping, reset
-
----
-
-## 6. PPU Foundations (register semantics first)
-
-### 6.1 PPU state (`nes/ppu/ppu.rkt` + `nes/ppu/timing.rkt`)
-
-* [x] Define PPU timing constants (scanlines, cycles, vblank start/end)
-* [x] Define PPU state:
-  * v, t, x, w (scroll/address latches)
-  * status bits, mask, ctrl
-  * OAM (256B), secondary OAM
-  * palette RAM (32B)
-  * nametable VRAM (2KB)
-  * read buffer for $2007
-* [x] Implement `ppu-tick!` advancing by 1 PPU cycle (even if Mode A batches)
-
-### 6.2 PPU registers semantics (`nes/ppu/regs.rkt`)
-
-Implement correct side effects early:
+**Fix:** Implement sprite overflow detection in sprite evaluation, including the hardware bug.
 
-* [x] $2000 PPUCTRL: NMI enable, increment, pattern table selects
-* [x] $2001 PPUMASK (store bits; rendering effects later)
-* [x] $2002 PPUSTATUS:
-  * vblank flag clear-on-read
-  * resets w toggle
-* [x] $2003 OAMADDR
-* [x] $2004 OAMDATA read/write + auto-inc
-* [x] $2005 PPUSCROLL: w toggle, sets x and t
-* [x] $2006 PPUADDR: w toggle, sets t and v
-* [x] $2007 PPUDATA:
-  * buffered reads for non-palette
-  * no buffering for palette reads
-  * increment v by 1/32
-* [x] Palette quirks:
-  * $3F10/$3F14/$3F18/$3F1C mirror to $3F00/$3F04/$3F08/$3F0C
+### APU Frame Counter Timing
+**Location:** `nes/apu/apu.rkt`
 
-### 6.3 PPU bus (separate from CPU bus)
+Implementation exists but 7/8 APU tests fail. Likely issues:
+- Off-by-one errors in cycle counting
+- Frame IRQ timing wrong
+- DMC stall integration buggy
 
-* [x] Define PPU bus mapping:
-  * pattern table $0000-$1FFF from CHR ROM/RAM (mapper)
-  * nametables $2000-$2FFF internal VRAM with mirroring
-  * palette $3F00-$3F1F with mirrors
-* [x] (T) Unit tests for palette mirroring and nametable mirroring modes
+**Fix:** Debug against blargg's APU tests, fix timing issues.
 
----
+## Low Priority
 
-## 7. OAM DMA (this unblocks many games)
+### Bus Handler Linear Search
+**Location:** `lib/bus.rkt:108-111`
 
-### 7.1 DMA implementation (`nes/dma.rkt`)
+Page table provides O(1) lookup for common case, but contested pages fall back to O(n) linear search through handlers.
 
-* [x] Implement $4014 write handler:
-  * source page = value << 8
-  * copy 256 bytes CPU memory → PPU OAM
-  * apply CPU stall cycles: 513 or 514 depending on CPU cycle parity
-* [x] Integrate DMA stall into scheduler:
-  * easiest: after write, set `dma-stall-cycles` counter
-  * each `step!` consumes stall cycles appropriately (no instruction fetch)
-* [x] (T) Unit test:
-  * copy correctness
-  * stall cycle count parity behavior
+Not a practical issue given small handler count, but could optimize if needed.
 
----
+### Mapper Integration Unnecessary Lambda Wrapper
+**Location:** `nes/system.rkt:113-114`
 
-## 8. Minimal Video Output (SDL3)
-
-### 8.1 Frontend video pipeline (`frontend/video.rkt`)
-
-* [x] Create SDL window + texture
-* [x] Upload RGBA framebuffer (streaming texture with lock/unlock)
-* [x] Integer scaling support (1x-8x, keyboard keys 1-4)
-* [x] (T) Smoke test: render solid color pattern
+```racket
+(nes-memory-set-cart-write! mem
+  (λ (addr val)
+    ((mapper-cpu-write mapper) addr val)))
+```
 
-### 8.2 Deterministic palette (`nes/ppu/palette.rkt`)
+The lambda wrapper is unnecessary - could pass `mapper-cpu-write` directly.
 
-* [x] Choose and document a fixed 64-color palette for tests (2C02 approximation)
-* [x] Implement palette lookup function returning RGBA
+### PPU Register Dispatch is Ad-Hoc
+**Location:** `nes/ppu/regs.rkt:48-76`
 
-### 8.3 Background rendering (incremental)
+Case statement with hardcoded register numbers. Could use register descriptor table for extensibility, but current approach works fine.
 
-Start simple: render a single nametable without scrolling.
+## Test Status
 
-* [x] Implement pattern table fetch from CHR (`nes/ppu/render.rkt`)
-* [x] Implement nametable + attribute table interpretation
-* [x] Render background into framebuffer (256×240)
-* [ ] (T) Screenshot test for a known title screen (once stable)
+Current test results from TESTING.md:
 
----
+| Category | Pass | Total | Notes |
+|----------|------|-------|-------|
+| CPU | 16 | 16 | All official opcodes pass |
+| PPU | 3 | 10 | VBlank/NMI timing tests need cycle-level precision |
+| APU | 1 | 8 | Frame counter, channels broken |
+| Mappers | 1 | 6 | MMC3 IRQ not implemented |
 
-## 9. Controllers + Input
+## Architecture Notes
 
-### 9.1 Controller shift register (`nes/input/controller.rkt`)
+### Timing Model
 
-* [x] Implement $4016 strobe behavior
-* [x] Implement serial reads for 8 buttons
-* [x] Decide/document post-8 reads behavior (returns 1 for official controller compatibility)
-* [x] (T) Unit test: known read sequences given button states
-
-### 9.2 SDL input mapping (`main.rkt` integration)
+The emulator uses "Mode A" instruction-stepped timing:
+1. CPU executes one instruction, reports cycles consumed
+2. PPU advances by `cycles * 3` (PPU runs at 3x CPU clock)
+3. APU advances by `cycles`
 
-* [x] Map keyboard to NES buttons (arrows=D-pad, Z=A, X=B, Enter=Start, RShift=Select)
-* [x] Poll/update controller state per event in main loop
+This is simpler but less accurate than cycle-interleaved "Mode B" timing.
 
----
+### State Fragmentation
 
-## 10. Sprites (Playability)
+Mutable state is spread across CPU, PPU, APU, and System structs using boxes. This makes atomic updates and save states harder. Consider consolidating related state.
 
-### 10.1 Sprite rendering basics
+### Renderer/PPU Split
 
-* [x] Implement sprite fetch from pattern tables (`nes/ppu/render.rkt`)
-* [x] Render sprites over background with priority bits
-* [x] Implement sprite transparency (pixel value 0 = transparent)
-* [x] Implement sprite 0 hit detection (frame-level, not scanline-accurate)
-* [ ] Implement 8-sprites-per-scanline limit (approx first)
-
-### 10.2 Tests
-
-* [ ] Add `sprite_hit_tests` harness runner + basic pass criteria
-* [ ] Add screenshot-based regression tests for a sprite-heavy scene
-
----
-
-## 11. Scrolling (Mario tier)
-
-### 11.1 Scroll correctness (t/v/x/w)
-
-* [x] Implement coarse X/Y and fine X/Y scroll behavior (v register decoding)
-* [x] Implement PPUSCROLL/PPUADDR interaction fully (in regs.rkt)
-* [x] Implement nametable switching during scroll (XOR-based nt selection)
-
-### 11.2 Split scrolling (status bars)
-
-* [ ] Support mid-frame changes to scroll regs (within Mode A limits)
-* [ ] Add at least one split-scroll validation ROM/screenshot
-
----
-
-## 12. Mapper Expansion
-
-### 12.1 Common mapper interface (`nes/mappers/mapper.rkt`)
-
-* [x] Define clear interface:
-  * CPU read/write
-  * PPU read/write
-  * mirroring control
-  * optional IRQ hooks
-  * serialize/deserialize for save-states
-
-### 12.2 Implement mappers
-
-* [x] MMC1
-  * [x] shift register writes
-  * [x] PRG bank modes (0/1=32KB, 2=fix first, 3=fix last)
-  * [x] CHR bank modes (4KB and 8KB)
-  * [x] mirroring control
-  * [x] PRG RAM enable
-  * [ ] (T) Zelda boots + saves
-* [x] UxROM
-  * [x] fixed/variable PRG bank (16KB switchable at $8000, fixed last at $C000)
-  * [ ] (T) Mega Man runs
-* [x] CNROM
-  * [x] CHR bank switching (8KB banks)
-  * [ ] (T) Gradius runs
-* [ ] MMC3
-  * [ ] PRG/CHR bank regs
-  * [ ] scanline counter + IRQ
-  * [ ] mirroring control
-  * [ ] (T) MMC3 test ROMs + SMB3 basic correctness
-
----
-
-## 13. APU: Semantics First (silent-but-correct)
-
-### 13.1 Register map (`nes/apu/apu.rkt`)
-
-* [x] Store all APU regs with correct write side effects
-* [x] Status register reads, channel enables
-* [x] Frame counter config
-* [x] Length counter table and loading
-
-### 13.2 Frame counter + IRQ
-
-* [x] Implement sequencing for 4-step/5-step
-* [x] Frame IRQ behavior (set on step 4 in 4-step mode, inhibit flag)
-* [x] Quarter-frame clocking (linear counter, envelopes)
-* [x] Half-frame clocking (length counters, sweep)
-* [x] Integrated into system scheduler
-* [ ] (T) APU timing/IRQ test ROM harness (pass where applicable)
-
-### 13.3 DMC DMA hooks (logic before sound)
-
-* [x] Implement DMC address/length regs
-* [x] DMC rate timer and sample fetch scheduling
-* [x] DMC sample buffer with 8-bit shift register output
-* [x] CPU cycle stealing (4 cycles per sample byte fetch)
-* [x] DMC IRQ on sample completion (non-looping)
-* [x] Integrated into system scheduler
-* [ ] (T) DMC timing sanity tests (as available)
-
----
-
-## 14. APU: Sound Generation + Output
-
-### 14.1 Channels (`nes/apu/channels.rkt`)
-
-* [x] Pulse: duty/envelope/sweep
-* [x] Triangle: linear counter
-* [x] Noise: LFSR
-* [x] DMC: delta modulation output
-
-### 14.2 Mixing (`nes/apu/mixer.rkt`)
-
-* [x] Implement NES mixing formula (document)
-* [ ] Optional filters (document)
-
-### 14.3 SDL audio (`frontend/audio.rkt`)
-
-* [x] Choose device sample rate
-* [x] Implement resampling from APU tick rate to device
-* [x] Implement buffering (ring buffer) + drift correction vs video pacing
-* [ ] (T) Audio smoke test: generate tone/known pattern without crackle
-
----
-
-## 15. Debug Tooling (make fixing bugs fast)
-
-### 15.1 Trace + compare (`debug/trace.rkt` + `debug/compare.rkt`)
-
-* [ ] Toggleable instruction trace (nestest format)
-* [ ] Compare against known-good traces (Mesen/FCEUX) with first-divergence report
-
-### 15.2 Save states (`debug/savestate.rkt`)
-
-* [ ] Save/load from file
-* [ ] Integrate with debugger hotkeys (frontend)
-* [ ] (T) Round-trip save-state for a running ROM (hash key regions)
-
-### 15.3 Viewers (`debug/viewer.rkt`)
-
-* [ ] Pattern table viewer
-* [ ] Nametable viewer
-* [ ] Palette viewer
-* [ ] OAM viewer
-
----
-
-## 16. Accuracy Mode (Cycle Interleaving)
-
-### 16.1 Scheduler Mode B (`nes/system.rkt`)
-
-* [ ] Add `tick-cpu-cycle!` primitive
-* [ ] Implement cycle-level interleaving CPU/PPU/APU
-* [ ] Ensure DMA stalls work in Mode B
-
-### 16.2 Tight timing fixes
-
-* [ ] Sprite 0 hit timing refinements
-* [ ] MMC3 IRQ timing refinements
-* [ ] PPU scanline/cycle event correctness
-* [ ] Open bus refinements (as tests demand)
-
-### 16.3 Unofficial opcodes
-
-* [ ] Add separate opcode table for unofficial ops
-* [ ] Gate behind a flag/config
-* [ ] (T) Targeted test ROMs / specific game fixes
-
----
-
-## 17. Regression Suite (always growing)
-
-* [ ] Add a curated “smoke ROM list” with per-ROM expectations:
-  * boots to title
-  * renders stable frame hash
-  * accepts input
-* [ ] Add screenshot golden set for:
-  * 1 title screen
-  * 1 scrolling scene
-  * 1 sprite-heavy scene
-  * 1 MMC3 split-scroll scene
-* [ ] Add a known-good trace snapshot for one tricky timing case
-
----
-
-## 18. Nice-to-haves (after core correctness)
-
-* [ ] PAL support (separate timing constants)
-* [ ] Configurable palettes + NTSC filter emulation
-* [ ] Rewind (ring buffer of save-states)
-* [ ] Movie recording / input replay
-* [ ] Additional controllers/peripherals
-* [ ] UI overlay for FPS, CPU/PPU timing, audio buffer depth
+PPU timing (`ppu-tick!`) and rendering (`render-frame!`) are separate code paths. This means scroll register changes during rendering don't affect output until the next frame.

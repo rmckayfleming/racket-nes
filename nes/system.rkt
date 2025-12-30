@@ -83,8 +83,8 @@
    total-cycles-box ; Total CPU cycles executed
    trace-box        ; Trace output enabled?
    dma-stall-box    ; DMA stall cycles pending
-   nmi-pending-box  ; NMI pending flag (ready to fire)
-   nmi-delay-box    ; NMI delay counter (2->1->fire)
+   prev-nmi-box     ; Previous NMI line state (for edge detection)
+   nmi-delay-box    ; Delay counter for software-triggered NMI (0=none, 1=fire after next instr)
    audio-callback-box) ; Audio sample callback (sample cycles -> void)
   #:transparent)
 
@@ -113,14 +113,13 @@
     (λ (addr val)
       ((mapper-cpu-write mapper) addr val)))
 
-  ;; Box for NMI pending (shared between PPU and step function)
-  ;; NMI timing: When NMI is triggered (via VBlank or $2000 write), it takes effect
-  ;; after the NEXT instruction completes. We track this with a delay counter:
-  ;; - 0: no NMI pending
-  ;; - 2: NMI just triggered, will become 1 after current instruction
-  ;; - 1: NMI will fire after current instruction
-  (define nmi-pending-box (box #f))    ; Immediate - fire on next cpu-step!
-  (define nmi-delay-box (box 0))       ; Delay counter (2 -> 1 -> fire)
+  ;; NMI edge detection: track previous state of NMI output line
+  ;; NMI fires when nmi_output transitions from LOW to HIGH (edge-triggered)
+  ;; nmi_output = nmi_occurred AND nmi_enabled (PPUCTRL bit 7)
+  (define prev-nmi-box (box #f))
+  ;; Delay counter for software-triggered NMI ($2000 write enabling NMI during VBlank)
+  ;; When $2000 write enables NMI while VBlank is set, NMI fires after the NEXT instruction
+  (define nmi-delay-box (box 0))
 
   ;; Connect PPU registers to CPU memory
   (nes-memory-set-ppu-read! mem
@@ -128,22 +127,21 @@
       ;; reg is 0-7 (PPU register within $2000-$2007)
       (define-values (byte nmi-changed?)
         (ppu-reg-read p reg (λ (addr) (ppu-bus-read pbus addr))))
-      ;; Reading $2002 can clear NMI (if reading while NMI was about to fire)
-      (when nmi-changed?
-        (when (not (ppu-nmi-output? p))
-          ;; NMI was suppressed - clear pending and delay
-          (set-box! nmi-pending-box #f)
-          (set-box! nmi-delay-box 0)))
+      ;; Reading $2002 clears nmi-occurred, which affects nmi-output
+      ;; The edge detection in nes-step! will handle suppression naturally
       byte))
 
   (nes-memory-set-ppu-write! mem
     (λ (reg val)
       ;; reg is 0-7 (PPU register within $2000-$2007)
-      (define nmi-changed?
-        (ppu-reg-write p reg val (λ (addr byte) (ppu-bus-write pbus addr byte))))
-      ;; Writing to $2000 can trigger NMI if vblank is set
-      ;; NMI fires after the NEXT instruction, so set delay to 2
-      (when (and nmi-changed? (ppu-nmi-output? p))
+      (define old-nmi-output (ppu-nmi-output? p))
+      (ppu-reg-write p reg val (λ (addr byte) (ppu-bus-write pbus addr byte)))
+      ;; Check if $2000 write caused NMI output to go high (software-triggered edge)
+      ;; NMI fires after the NEXT instruction completes (not this one)
+      ;; Set delay=2 so: end of this instruction → 1, end of next → 0 and fire
+      (when (and (= reg 0)  ; PPUCTRL
+                 (not old-nmi-output)
+                 (ppu-nmi-output? p))
         (set-box! nmi-delay-box 2))))
 
   ;; DMA stall box (shared for DMA handler to set)
@@ -206,7 +204,7 @@
          (box 0)          ; total cycles
          (box #f)         ; trace disabled
          dma-stall-box
-         nmi-pending-box
+         prev-nmi-box
          nmi-delay-box
          (box #f)))       ; audio callback (disabled by default)
 
@@ -279,11 +277,6 @@
 
       ;; Normal execution
       (let ([cycles-before (cpu-cycles cpu)])
-        ;; Check for pending NMI and signal it to CPU
-        (when (unbox (nes-nmi-pending-box sys))
-          (set-box! (nes-nmi-pending-box sys) #f)
-          (set-cpu-nmi-pending! cpu #t))
-
         ;; Print trace if enabled
         (when (nes-trace-enabled? sys)
           (displayln (trace-line cpu)))
@@ -317,16 +310,40 @@
                     (+ (unbox (nes-dma-stall-box sys)) dmc-stall))
           (apu-clear-dmc-stall-cycles! (nes-apu sys)))
 
-        ;; Handle NMI delay counter
-        ;; Delay=2 -> 1 (just triggered, needs one more instruction)
-        ;; Delay=1 -> 0 and set pending (fires on next step)
+        ;; NMI edge detection: fire NMI when nmi_output goes LOW->HIGH
+        ;; nmi_output = nmi_occurred AND nmi_enabled (PPUCTRL bit 7)
+        ;;
+        ;; There are two sources of NMI edges:
+        ;; 1. PPU-driven: VBlank sets nmi_occurred during PPU tick
+        ;;    -> fires immediately after this instruction
+        ;; 2. Software-driven: $2000 write enables NMI while VBlank is set
+        ;;    -> fires after the NEXT instruction (1-instruction delay)
+        ;;
+        ;; The delay counter handles case 2. PPU tick handles case 1.
+        (define prev-nmi (unbox (nes-prev-nmi-box sys)))
+        (define curr-nmi (ppu-nmi-output? p))
         (define delay (unbox (nes-nmi-delay-box sys)))
+
+        ;; Handle software-triggered NMI delay (from $2000 write)
+        ;; When $2000 write enables NMI while VBlank is set, NMI fires
+        ;; after the NEXT instruction completes.
+        ;; delay=2 → 1 → 0 and fire
         (when (> delay 0)
-          (if (= delay 1)
-              (begin
-                (set-box! (nes-nmi-delay-box sys) 0)
-                (set-box! (nes-nmi-pending-box sys) #t))
-              (set-box! (nes-nmi-delay-box sys) (- delay 1))))
+          (define new-delay (- delay 1))
+          (set-box! (nes-nmi-delay-box sys) new-delay)
+          (when (= new-delay 0)
+            ;; Delay expired, fire NMI if output still high
+            (when curr-nmi
+              (set-cpu-nmi-pending! cpu #t))))
+
+        ;; Handle PPU-driven NMI edge (VBlank started during PPU tick)
+        ;; This fires immediately (no delay needed)
+        (when (and (= delay 0)  ; Only if no software delay in progress
+                   (not prev-nmi)
+                   curr-nmi)
+          (set-cpu-nmi-pending! cpu #t))
+
+        (set-box! (nes-prev-nmi-box sys) curr-nmi)
 
         ;; Check for APU IRQ and signal to CPU
         (when (apu-irq-pending? (nes-apu sys))
@@ -361,12 +378,10 @@
       (when (and (= scanline SCANLINE-VBLANK-START)
                  (= cycle 1))
         (set-ppu-nmi-occurred! p #t)
-        ;; Trigger NMI if enabled - fires after NEXT instruction
-        ;; Since ppu-tick runs after current instruction, delay=1 means
-        ;; NMI will fire after one more instruction executes
+        ;; Update NMI output line: nmi_output = nmi_occurred AND nmi_enabled
+        ;; The edge detection in nes-step! will fire NMI if this goes HIGH
         (when (ppu-ctrl-flag? p CTRL-NMI-ENABLE)
-          (set-ppu-nmi-output! p #t)
-          (set-box! (nes-nmi-delay-box sys) 1)))
+          (set-ppu-nmi-output! p #t)))
 
       ;; Pre-render scanline (261): clear flags at cycle 1
       (when (and (= scanline SCANLINE-PRE-RENDER)
@@ -474,13 +489,12 @@
     (define cycle (ppu-cycle p))
     (define scanline (ppu-scanline p))
 
-    ;; VBlank start: scanline 241, cycle 1 - trigger NMI (delayed)
+    ;; VBlank start: scanline 241, cycle 1
     (when (and (= scanline SCANLINE-VBLANK-START)
                (= cycle 1))
       (set-ppu-nmi-occurred! p #t)
       (when (ppu-ctrl-flag? p CTRL-NMI-ENABLE)
-        (set-ppu-nmi-output! p #t)
-        (set-box! (nes-nmi-delay-box sys) 1)))
+        (set-ppu-nmi-output! p #t)))
 
     ;; Pre-render scanline: clear flags at cycle 1
     (when (and (= scanline SCANLINE-PRE-RENDER)
@@ -524,12 +538,8 @@
         stall-cycles)
 
       ;; Normal execution
-      (let ([cycles-before (cpu-cycles cpu)])
-        ;; Check for pending NMI
-        (when (unbox (nes-nmi-pending-box sys))
-          (set-box! (nes-nmi-pending-box sys) #f)
-          (set-cpu-nmi-pending! cpu #t))
-
+      (let ([cycles-before (cpu-cycles cpu)]
+            [p (nes-ppu sys)])
         ;; Execute one instruction
         (cpu-step! cpu)
 
@@ -544,14 +554,26 @@
         ;; Fast PPU tick (only VBlank/NMI timing)
         (ppu-tick-fast! sys (* cycles 3))
 
-        ;; Handle NMI delay counter
+        ;; NMI edge detection (same as nes-step!)
+        (define prev-nmi (unbox (nes-prev-nmi-box sys)))
+        (define curr-nmi (ppu-nmi-output? p))
         (define delay (unbox (nes-nmi-delay-box sys)))
+
+        ;; Handle software-triggered NMI delay
         (when (> delay 0)
-          (if (= delay 1)
-              (begin
-                (set-box! (nes-nmi-delay-box sys) 0)
-                (set-box! (nes-nmi-pending-box sys) #t))
-              (set-box! (nes-nmi-delay-box sys) (- delay 1))))
+          (define new-delay (- delay 1))
+          (set-box! (nes-nmi-delay-box sys) new-delay)
+          (when (= new-delay 0)
+            (when curr-nmi
+              (set-cpu-nmi-pending! cpu #t))))
+
+        ;; Handle PPU-driven NMI edge
+        (when (and (= delay 0)
+                   (not prev-nmi)
+                   curr-nmi)
+          (set-cpu-nmi-pending! cpu #t))
+
+        (set-box! (nes-prev-nmi-box sys) curr-nmi)
 
         cycles)))
 
@@ -590,7 +612,7 @@
   (set-box! (nes-frame-count-box sys) 0)
   (set-box! (nes-total-cycles-box sys) (cpu-cycles cpu))
   (set-box! (nes-dma-stall-box sys) 0)
-  (set-box! (nes-nmi-pending-box sys) #f)
+  (set-box! (nes-prev-nmi-box sys) #f)
   (set-box! (nes-nmi-delay-box sys) 0))
 
 ;; ============================================================================
