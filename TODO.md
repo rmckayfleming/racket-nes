@@ -32,13 +32,6 @@ The "Mode A" scheduler ticks PPU/APU only after entire CPU instructions complete
 
 **Fix:** Extract shared logic into common function, or document that fast mode may diverge.
 
-### Sprite Overflow Never Set
-**Location:** `nes/system.rkt:377`
-
-`ppu-sprite-overflow?` is cleared on pre-render scanline but never set. The buggy hardware behavior (false positives after 8 sprites) is not implemented.
-
-**Fix:** Implement sprite overflow detection in sprite evaluation, including the hardware bug.
-
 ### APU Frame Counter Timing
 **Location:** `nes/apu/apu.rkt`
 

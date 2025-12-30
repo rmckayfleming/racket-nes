@@ -456,6 +456,16 @@
         (when (check-sprite0-hit? p pbus scanline x)
           (set-ppu-sprite0-hit! p #t)))
 
+      ;; Sprite overflow detection at cycle 256 (end of sprite evaluation)
+      ;; This implements the buggy hardware behavior where the PPU incorrectly
+      ;; checks sprite bytes after finding 8 sprites on a scanline.
+      ;; Reference: https://www.nesdev.org/wiki/PPU_sprite_evaluation
+      (when (and (< scanline VISIBLE-HEIGHT)  ; Visible scanlines only
+                 (= cycle 256)
+                 (not (ppu-sprite-overflow? p))  ; Not already set
+                 rendering-enabled?)
+        (evaluate-sprites-for-scanline p scanline))
+
       ;; MMC3 scanline counter tick
       ;; Called at cycle 260 of visible scanlines (0-239) and pre-render (261)
       ;; This is when the PPU fetches sprites, causing A12 to rise on pattern table access

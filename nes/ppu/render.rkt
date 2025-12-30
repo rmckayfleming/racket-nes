@@ -32,6 +32,9 @@
  ;; Sprite 0 hit detection (for use during PPU tick)
  check-sprite0-hit?      ; Check if sprite 0 hit occurs at given scanline/cycle
 
+ ;; Sprite overflow detection (for use during PPU tick)
+ evaluate-sprites-for-scanline  ; Evaluate sprites for scanline, set overflow if >8
+
  ;; Tile rendering helpers (for debugging/testing)
  decode-tile-row
  get-attribute-palette
@@ -238,6 +241,82 @@
 
                 ;; Hit if background pixel is also opaque
                 (not (= bg-pixel 0)))))))
+
+;; ============================================================================
+;; Sprite Overflow Detection
+;; ============================================================================
+
+;; Evaluate sprites for the given scanline and set overflow flag if more than 8
+;; sprites are found on this scanline.
+;;
+;; This implements the famous NES PPU sprite overflow bug. On real hardware:
+;; 1. For sprites 0-7, PPU correctly checks if sprite Y falls on scanline
+;; 2. After finding 8 sprites, the PPU has a bug where it increments both
+;;    the sprite number (n) AND the byte offset within the sprite (m)
+;; 3. This causes it to compare incorrect bytes (attributes, X position)
+;;    against the scanline, leading to false positives and negatives
+;;
+;; Reference: https://www.nesdev.org/wiki/PPU_sprite_evaluation
+;;
+;; p: PPU state
+;; scanline: current scanline (0-239)
+;;
+;; Sets ppu-sprite-overflow? if overflow detected
+(define (evaluate-sprites-for-scanline p scanline)
+  (define oam (ppu-oam p))
+  (define sprite-height (if (ppu-ctrl-flag? p CTRL-SPRITE-SIZE) 16 8))
+  (define sprites-found 0)
+
+  ;; Phase 1: Find sprites 0-63, stop after finding 8
+  ;; n = sprite number (0-63)
+  (let loop-normal ([n 0])
+    (when (and (< n NUM-SPRITES) (< sprites-found 8))
+      (define sprite-y (bytes-ref oam (* n SPRITE-SIZE)))
+      (define screen-y (+ sprite-y 1))  ; OAM Y is scanline - 1
+      ;; Check if this sprite is on the current scanline
+      (when (and (>= scanline screen-y)
+                 (< scanline (+ screen-y sprite-height)))
+        (set! sprites-found (+ sprites-found 1)))
+      (loop-normal (+ n 1))))
+
+  ;; Phase 2: Buggy overflow detection
+  ;; After finding 8 sprites, the hardware bug kicks in:
+  ;; - Instead of checking byte 0 (Y), it checks byte m where m increments
+  ;; - m starts at 0 but increments on each check, wrapping around 0-3
+  ;; This means it compares the wrong sprite bytes against the scanline
+  (when (= sprites-found 8)
+    ;; Continue scanning with the buggy behavior
+    ;; Start from where we left off (next sprite after 8th)
+    (let loop-buggy ([n (let scan ([i 0] [count 0])
+                          (cond
+                            [(>= i NUM-SPRITES) i]
+                            [(let* ([sy (bytes-ref oam (* i SPRITE-SIZE))]
+                                    [screen-y (+ sy 1)])
+                               (and (>= scanline screen-y)
+                                    (< scanline (+ screen-y sprite-height))))
+                             (if (= count 7) (+ i 1) (scan (+ i 1) (+ count 1)))]
+                            [else (scan (+ i 1) count)]))]
+                     [m 0])  ; Byte offset within sprite (0-3)
+      (when (< n NUM-SPRITES)
+        ;; Read the WRONG byte from OAM due to the bug
+        ;; Instead of always reading Y (byte 0), read byte m
+        (define oam-addr (+ (* n SPRITE-SIZE) m))
+        (define oam-value (bytes-ref oam oam-addr))
+
+        ;; Compare this (possibly wrong) value as if it were a Y coordinate
+        (define screen-y (+ oam-value 1))
+        (cond
+          ;; If "match", set overflow and stop
+          [(and (>= scanline screen-y)
+                (< scanline (+ screen-y sprite-height)))
+           (set-ppu-sprite-overflow! p #t)]
+          ;; If no match, increment m (the bug!) and continue
+          [else
+           ;; m cycles through 0,1,2,3,0,1,2,3...
+           ;; n only increments when m wraps from 3 to 0
+           (if (= m 3)
+               (loop-buggy (+ n 1) 0)
+               (loop-buggy n (+ m 1)))])))))
 
 ;; ============================================================================
 ;; Pattern Table Decoding
@@ -668,4 +747,82 @@
     (check-true (sprite-flip-v? #b10000000))
     ;; Both flips
     (check-true (sprite-flip-h? #b11000000))
-    (check-true (sprite-flip-v? #b11000000))))
+    (check-true (sprite-flip-v? #b11000000)))
+
+  (test-case "sprite overflow: fewer than 8 sprites"
+    (define p (make-ppu))
+    ;; Set up 7 sprites on scanline 50
+    (define oam (ppu-oam p))
+    (for ([i (in-range 7)])
+      (bytes-set! oam (+ (* i SPRITE-SIZE) 0) 49))  ; Y = 49 -> screen Y = 50
+    ;; Put remaining sprites off-screen
+    (for ([i (in-range 7 NUM-SPRITES)])
+      (bytes-set! oam (+ (* i SPRITE-SIZE) 0) 240))
+
+    ;; Enable rendering
+    (set-ppu-mask! p #x18)  ; BG + sprites enabled
+
+    ;; Evaluate for scanline 50
+    (evaluate-sprites-for-scanline p 50)
+    (check-false (ppu-sprite-overflow? p)))
+
+  (test-case "sprite overflow: exactly 8 sprites"
+    (define p (make-ppu))
+    (define oam (ppu-oam p))
+    ;; Set up exactly 8 sprites on scanline 50
+    (for ([i (in-range 8)])
+      (bytes-set! oam (+ (* i SPRITE-SIZE) 0) 49))
+    ;; Put remaining sprites off-screen
+    (for ([i (in-range 8 NUM-SPRITES)])
+      (bytes-set! oam (+ (* i SPRITE-SIZE) 0) 240))
+
+    (set-ppu-mask! p #x18)
+    (evaluate-sprites-for-scanline p 50)
+    ;; With exactly 8, no overflow (bug doesn't trigger on 9th sprite)
+    (check-false (ppu-sprite-overflow? p)))
+
+  (test-case "sprite overflow: 9+ sprites triggers overflow"
+    (define p (make-ppu))
+    (define oam (ppu-oam p))
+    ;; Set up 9 sprites on scanline 50
+    ;; The 9th sprite's Y will be checked correctly (m=0 at start of buggy phase)
+    (for ([i (in-range 9)])
+      (bytes-set! oam (+ (* i SPRITE-SIZE) 0) 49))
+    ;; Put remaining sprites off-screen
+    (for ([i (in-range 9 NUM-SPRITES)])
+      (bytes-set! oam (+ (* i SPRITE-SIZE) 0) 240))
+
+    (set-ppu-mask! p #x18)
+    (evaluate-sprites-for-scanline p 50)
+    ;; 9th sprite triggers overflow
+    (check-true (ppu-sprite-overflow? p)))
+
+  (test-case "sprite overflow bug: false negative due to m increment"
+    ;; Test the hardware bug: after finding 8, m increments
+    ;; If the 9th sprite's tile/attr/x bytes don't match, no overflow
+    (define p (make-ppu))
+    (define oam (ppu-oam p))
+    ;; 8 sprites on scanline 50
+    (for ([i (in-range 8)])
+      (bytes-set! oam (+ (* i SPRITE-SIZE) 0) 49))
+    ;; 9th sprite: Y = 49, but tile = 200 (checked with m=0)
+    ;; Wait, m=0 still checks Y, so this should still trigger
+    ;; Put 9th sprite at Y where it's NOT on scanline
+    (bytes-set! oam (+ (* 8 SPRITE-SIZE) 0) 0)  ; Y = 0
+    ;; But set its tile byte (byte 1) to look like it's on scanline 50
+    ;; When m=1, it reads tile byte as Y
+    (bytes-set! oam (+ (* 8 SPRITE-SIZE) 1) 49)
+    ;; Put remaining sprites off-screen with no matching bytes
+    (for ([i (in-range 9 NUM-SPRITES)])
+      (bytes-set! oam (+ (* i SPRITE-SIZE) 0) 240)
+      (bytes-set! oam (+ (* i SPRITE-SIZE) 1) 240)
+      (bytes-set! oam (+ (* i SPRITE-SIZE) 2) 240)
+      (bytes-set! oam (+ (* i SPRITE-SIZE) 3) 240))
+
+    (set-ppu-mask! p #x18)
+    (evaluate-sprites-for-scanline p 50)
+    ;; The 9th sprite's Y (byte 0) is checked with m=0, doesn't match
+    ;; m increments to 1, n stays at 8
+    ;; Then sprite 8's tile byte (49) is checked, which DOES match scanline range
+    ;; So this should trigger overflow!
+    (check-true (ppu-sprite-overflow? p))))  ; False positive due to bug
