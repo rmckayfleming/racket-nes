@@ -5,14 +5,19 @@
 ;; The main NES emulator orchestration. Ties together CPU, PPU, APU,
 ;; memory map, and mapper into a cohesive system.
 ;;
-;; Timing Model (Mode A - Instruction-level):
-;; - Execute one CPU instruction
+;; Two timing modes are available:
+;;
+;; Mode A - Instruction-Stepped (nes-step!):
+;; - Execute one complete CPU instruction
 ;; - Tick PPU by (cpu-cycles * 3) - PPU runs 3x faster
 ;; - Tick APU by cpu-cycles
-;; - Handle DMA stalls
+;; - Faster but less accurate; suitable for most games
 ;;
-;; This is the simpler timing model suitable for most games.
-;; Mode B (cycle-level) can be added later for edge cases.
+;; Mode B - Cycle-Interleaved (nes-tick!):
+;; - Execute one CPU cycle
+;; - Tick PPU by 3 cycles
+;; - Tick APU by 1 cycle
+;; - Cycle-accurate; required for timing-sensitive games
 ;;
 ;; Reference: https://www.nesdev.org/wiki/Cycle_reference_chart
 
@@ -36,7 +41,8 @@
  nes-set-audio-callback!  ; Set callback for audio samples
 
  ;; Execution
- nes-step!          ; Execute one CPU instruction
+ nes-tick!          ; Execute one CPU cycle (Mode B - cycle-interleaved)
+ nes-step!          ; Execute one CPU instruction (Mode A - instruction-stepped)
  nes-step-fast!     ; Fast step for headless mode (minimal PPU/APU)
  nes-run-frame!     ; Run until next frame boundary
  nes-run-frame-fast! ; Fast frame for headless mode
@@ -61,6 +67,7 @@
          "ppu/render.rkt"
          "apu/apu.rkt"
          "../lib/6502/cpu.rkt"
+         "../lib/6502/cycle-cpu.rkt"
          "../lib/6502/opcodes.rkt"
          "../lib/6502/disasm.rkt"
          "../lib/bus.rkt"
@@ -244,7 +251,105 @@
   (set-box! (nes-audio-callback-box sys) callback))
 
 ;; ============================================================================
-;; Execution
+;; Execution - Mode B (Cycle-Interleaved)
+;; ============================================================================
+
+;; Execute one CPU cycle (Mode B timing)
+;; Returns #t if an instruction just completed
+;; This provides cycle-accurate timing for games that need it
+(define (nes-tick! sys)
+  (define cpu (nes-cpu sys))
+  (define p (nes-ppu sys))
+  (define dma-stall (unbox (nes-dma-stall-box sys)))
+
+  ;; Handle DMA stall: during DMA, CPU is halted but PPU/APU continue
+  (if (> dma-stall 0)
+      ;; DMA cycle: tick PPU/APU but don't execute CPU
+      (begin
+        (set-box! (nes-dma-stall-box sys) (- dma-stall 1))
+        (set-box! (nes-total-cycles-box sys)
+                  (+ (unbox (nes-total-cycles-box sys)) 1))
+        ;; Tick PPU 3 times (PPU runs 3x CPU rate)
+        (ppu-tick! sys 3)
+        ;; Tick APU once (APU runs at CPU rate)
+        (apu-tick! (nes-apu sys) 1)
+        ;; Check for DMC DMA
+        (let ([dmc-stall (apu-dmc-stall-cycles (nes-apu sys))])
+          (when (> dmc-stall 0)
+            (set-box! (nes-dma-stall-box sys)
+                      (+ (unbox (nes-dma-stall-box sys)) dmc-stall))
+            (apu-clear-dmc-stall-cycles! (nes-apu sys))))
+        ;; Audio callback
+        (let ([audio-cb (unbox (nes-audio-callback-box sys))])
+          (when audio-cb
+            (audio-cb (apu-output (nes-apu sys)) 1)))
+        #f)
+
+      ;; Normal CPU cycle
+      (let ([instr-done? (cpu-tick! cpu)])
+        ;; Update total cycles (cpu-tick! already updated cpu-cycles)
+        (set-box! (nes-total-cycles-box sys)
+                  (+ (unbox (nes-total-cycles-box sys)) 1))
+
+        ;; Tick PPU 3 times (PPU runs 3x CPU rate)
+        (ppu-tick! sys 3)
+
+        ;; Tick APU once (APU runs at CPU rate)
+        (apu-tick! (nes-apu sys) 1)
+
+        ;; Audio callback
+        (let ([audio-cb (unbox (nes-audio-callback-box sys))])
+          (when audio-cb
+            (audio-cb (apu-output (nes-apu sys)) 1)))
+
+        ;; Check for DMC DMA
+        (let ([dmc-stall (apu-dmc-stall-cycles (nes-apu sys))])
+          (when (> dmc-stall 0)
+            (set-box! (nes-dma-stall-box sys)
+                      (+ (unbox (nes-dma-stall-box sys)) dmc-stall))
+            (apu-clear-dmc-stall-cycles! (nes-apu sys))))
+
+        ;; OAM DMA handling: when $4014 is written, calculate stall cycles
+        ;; This needs to happen at instruction boundary
+        (when (and instr-done? (unbox (nes-dma-pending-box sys)))
+          (set-box! (nes-dma-pending-box sys) #f)
+          (set-box! (nes-dma-stall-box sys)
+                    (+ (unbox (nes-dma-stall-box sys))
+                       (oam-dma-cycles (cpu-cycles cpu)))))
+
+        ;; NMI edge detection at instruction boundary
+        (when instr-done?
+          (let* ([prev-nmi (unbox (nes-prev-nmi-box sys))]
+                 [curr-nmi (ppu-nmi-output? p)]
+                 [delay (unbox (nes-nmi-delay-box sys))])
+
+            ;; Handle software-triggered NMI delay
+            (when (> delay 0)
+              (let ([new-delay (- delay 1)])
+                (set-box! (nes-nmi-delay-box sys) new-delay)
+                (when (and (= new-delay 0) curr-nmi)
+                  (set-cpu-nmi-pending! cpu #t))))
+
+            ;; Handle PPU-driven NMI edge
+            (when (and (= delay 0)
+                       (not prev-nmi)
+                       curr-nmi)
+              (set-cpu-nmi-pending! cpu #t))
+
+            (set-box! (nes-prev-nmi-box sys) curr-nmi)
+
+            ;; Check for APU IRQ
+            (when (apu-irq-pending? (nes-apu sys))
+              (set-cpu-irq-pending! cpu #t))
+
+            ;; Check for mapper IRQ
+            (when ((mapper-irq-pending? (nes-mapper sys)))
+              (set-cpu-irq-pending! cpu #t))))
+
+        instr-done?)))
+
+;; ============================================================================
+;; Execution - Mode A (Instruction-Stepped)
 ;; ============================================================================
 
 ;; Execute one CPU instruction (or consume DMA stall cycles)
