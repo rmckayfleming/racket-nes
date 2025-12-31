@@ -647,7 +647,11 @@
      (define base (merge16 (instr-state-addr-lo state) hi-byte))
      (define eff (u16 (+ base (cpu-y c))))
      (set-instr-state-effective-addr! state eff)
-     (set-instr-state-page-crossed?! state (not (= hi-byte (hi eff))))]
+     (define crossed? (not (= hi-byte (hi eff))))
+     (set-instr-state-page-crossed?! state crossed?)
+     ;; If page crossed and this is a read, add extra cycle
+     (when (and crossed? (not (is-write-opcode? opcode)))
+       (set-instr-state-total-cycles! state (+ (instr-state-total-cycles state) 1)))]
     [(3)
      (let* ([eff (instr-state-effective-addr state)]
             [crossed? (instr-state-page-crossed? state)])
@@ -716,7 +720,11 @@
      (define base (merge16 (instr-state-addr-lo state) hi-byte))
      (define eff (u16 (+ base (cpu-y c))))
      (set-instr-state-effective-addr! state eff)
-     (set-instr-state-page-crossed?! state (not (= hi-byte (hi eff))))]
+     (define crossed? (not (= hi-byte (hi eff))))
+     (set-instr-state-page-crossed?! state crossed?)
+     ;; If page crossed and this is a read, add extra cycle
+     (when (and crossed? (not (is-write-opcode? opcode)))
+       (set-instr-state-total-cycles! state (+ (instr-state-total-cycles state) 1)))]
     [(4) ; Cycle 5: Read (possibly from wrong page)
      (let* ([eff (instr-state-effective-addr state)]
             [crossed? (instr-state-page-crossed? state)])
@@ -1513,6 +1521,56 @@
     (define cycles (run-instruction-ticks c))
     (check-equal? cycles 6)
     (check-equal? (cpu-pc c) #x0003))  ; Return address + 1
+
+  (test-case "cpu-tick! LDA absolute,Y no page cross takes 4 cycles"
+    (define-values (c ram) (make-test-cpu))
+    (bytes-set! ram #x0000 #xB9)  ; LDA $1200,Y
+    (bytes-set! ram #x0001 #x00)
+    (bytes-set! ram #x0002 #x12)
+    (bytes-set! ram #x1210 #x88)
+    (set-cpu-pc! c #x0000)
+    (set-cpu-y! c #x10)
+    (define cycles (run-instruction-ticks c))
+    (check-equal? cycles 4)
+    (check-equal? (cpu-a c) #x88))
+
+  (test-case "cpu-tick! LDA absolute,Y page cross takes 5 cycles"
+    (define-values (c ram) (make-test-cpu))
+    (bytes-set! ram #x0000 #xB9)  ; LDA $12FF,Y
+    (bytes-set! ram #x0001 #xFF)
+    (bytes-set! ram #x0002 #x12)
+    (bytes-set! ram #x1310 #x77)  ; $12FF + $11 = $1310
+    (set-cpu-pc! c #x0000)
+    (set-cpu-y! c #x11)
+    (define cycles (run-instruction-ticks c))
+    (check-equal? cycles 5)
+    (check-equal? (cpu-a c) #x77))
+
+  (test-case "cpu-tick! LDA (indirect),Y no page cross takes 5 cycles"
+    (define-values (c ram) (make-test-cpu))
+    (bytes-set! ram #x0000 #xB1)  ; LDA ($10),Y
+    (bytes-set! ram #x0001 #x10)
+    (bytes-set! ram #x0010 #x00)  ; Low byte of address
+    (bytes-set! ram #x0011 #x12)  ; High byte of address -> $1200
+    (bytes-set! ram #x1210 #x66)  ; $1200 + $10 = $1210
+    (set-cpu-pc! c #x0000)
+    (set-cpu-y! c #x10)
+    (define cycles (run-instruction-ticks c))
+    (check-equal? cycles 5)
+    (check-equal? (cpu-a c) #x66))
+
+  (test-case "cpu-tick! LDA (indirect),Y page cross takes 6 cycles"
+    (define-values (c ram) (make-test-cpu))
+    (bytes-set! ram #x0000 #xB1)  ; LDA ($10),Y
+    (bytes-set! ram #x0001 #x10)
+    (bytes-set! ram #x0010 #xFF)  ; Low byte of address
+    (bytes-set! ram #x0011 #x12)  ; High byte of address -> $12FF
+    (bytes-set! ram #x1310 #x55)  ; $12FF + $11 = $1310 (page cross)
+    (set-cpu-pc! c #x0000)
+    (set-cpu-y! c #x11)
+    (define cycles (run-instruction-ticks c))
+    (check-equal? cycles 6)
+    (check-equal? (cpu-a c) #x55))
 
   (test-case "cpu-tick! matches cpu-step! cycle count for LDA"
     (define-values (c1 ram1) (make-test-cpu))

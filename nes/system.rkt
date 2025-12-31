@@ -44,7 +44,8 @@
  nes-tick!          ; Execute one CPU cycle (Mode B - cycle-interleaved)
  nes-step!          ; Execute one CPU instruction (Mode A - instruction-stepped)
  nes-step-fast!     ; Fast step for headless mode (minimal PPU/APU)
- nes-run-frame!     ; Run until next frame boundary
+ nes-run-frame!     ; Run until next frame boundary (Mode A)
+ nes-run-frame-tick! ; Run until next frame boundary (Mode B)
  nes-run-frame-fast! ; Fast frame for headless mode
  nes-reset!         ; Reset the system
 
@@ -603,6 +604,7 @@
        (set-ppu-cycle! p next-cycle)])))
 
 ;; Run until the next frame boundary (when PPU reaches scanline 0)
+;; Uses Mode A (instruction-stepped) timing
 (define (nes-run-frame! sys)
   (define p (nes-ppu sys))
   (define start-frame (ppu-frame p))
@@ -611,6 +613,18 @@
   (let loop ()
     (when (= (ppu-frame p) start-frame)
       (nes-step! sys)
+      (loop))))
+
+;; Run until the next frame boundary using Mode B (cycle-interleaved) timing
+;; This is slower but more accurate for timing-sensitive games
+(define (nes-run-frame-tick! sys)
+  (define p (nes-ppu sys))
+  (define start-frame (ppu-frame p))
+
+  ;; Run until the PPU frame counter advances
+  (let loop ()
+    (when (= (ppu-frame p) start-frame)
+      (nes-tick! sys)
       (loop))))
 
 ;; ============================================================================
