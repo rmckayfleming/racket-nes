@@ -18,60 +18,60 @@ Several test failures require cycle-level precision:
 
 ---
 
-## Phase 1: CPU Cycle Decomposition
+## Phase 1: CPU Cycle Decomposition ✅ COMPLETE
 
 Break instruction execution into per-cycle steps. Each cycle performs one bus operation.
 
-### 1.1 Instruction Microcode Table
-- [ ] Define microcode format: list of cycle operations per opcode
-- [ ] Cycle ops: `fetch-opcode`, `fetch-operand`, `read-addr`, `write-addr`, `internal`, `push`, `pull`
-- [ ] Each op specifies: address calculation, bus access type, register updates
+### 1.1 Instruction Microcode Table ✅
+- [x] Define microcode format: state machine with per-cycle handlers
+- [x] Each handler: address calculation, bus access, register updates
+- [x] Implemented in `lib/6502/cycle-cpu.rkt`
 
-### 1.2 Cycle-Stepped CPU Core
-- [ ] Add `cpu-tick!` function that advances CPU by exactly 1 cycle
-- [ ] Track current instruction state: opcode, cycle number, intermediate values
-- [ ] New fields in CPU struct: `instr-box`, `instr-cycle-box`, `instr-data-box`
-- [ ] Handle interrupt injection between instructions (not mid-instruction)
+### 1.2 Cycle-Stepped CPU Core ✅
+- [x] Add `cpu-tick!` function that advances CPU by exactly 1 cycle
+- [x] Track current instruction state via `instr-state` struct
+- [x] Uses CPU's `cycle-box` and `instr-state-box` for state tracking
+- [x] Handle interrupt injection between instructions (not mid-instruction)
 
-### 1.3 Addressing Mode Cycle Patterns
-Document cycle breakdown for each addressing mode:
-- [ ] Immediate (2 cycles): fetch opcode, fetch operand
-- [ ] Zero Page (3 cycles): fetch opcode, fetch addr, read/write
-- [ ] Zero Page,X/Y (4 cycles): fetch opcode, fetch addr, add index, read/write
-- [ ] Absolute (4 cycles): fetch opcode, fetch lo, fetch hi, read/write
-- [ ] Absolute,X/Y (4-5 cycles): +1 if page crossed on read
-- [ ] Indirect,X (6 cycles): fetch opcode, fetch ptr, add X, read lo, read hi, read/write
-- [ ] Indirect,Y (5-6 cycles): +1 if page crossed on read
-- [ ] Relative (2-4 cycles): branch taken +1, page crossed +1
+### 1.3 Addressing Mode Cycle Patterns ✅
+All addressing modes implemented with correct cycle counts:
+- [x] Immediate (2 cycles): fetch opcode, fetch operand
+- [x] Zero Page (3 cycles): fetch opcode, fetch addr, read/write
+- [x] Zero Page,X/Y (4 cycles): fetch opcode, fetch addr, add index, read/write
+- [x] Absolute (4 cycles): fetch opcode, fetch lo, fetch hi, read/write
+- [x] Absolute,X/Y (4-5 cycles): +1 if page crossed on read
+- [x] Indirect,X (6 cycles): fetch opcode, fetch ptr, add X, read lo, read hi, read/write
+- [x] Indirect,Y (5-6 cycles): +1 if page crossed on read
+- [x] Relative (2-4 cycles): branch taken +1, page crossed +1
 
-### 1.4 Instruction-Specific Behaviors
-- [ ] Read-modify-write: dummy write of old value before new value
-- [ ] Stack operations: correct push/pull cycle counts
-- [ ] JMP indirect: page-wrap bug on cycle timing
-- [ ] BRK/RTI/interrupts: 7-cycle sequence
+### 1.4 Instruction-Specific Behaviors ✅
+- [x] Read-modify-write: dummy write of old value before new value (6 cycles)
+- [x] Stack operations: correct push/pull cycle counts
+- [x] JMP indirect: page-wrap bug handled
+- [x] BRK/RTI/interrupts: 7-cycle sequence
 
 ---
 
-## Phase 2: Unified Tick Architecture
+## Phase 2: Unified Tick Architecture ✅ COMPLETE
 
 Create a master clock that drives all components in lockstep.
 
-### 2.1 Master Clock
-- [ ] Add `nes-tick!` function: advances entire system by 1 CPU cycle
-- [ ] Calls `cpu-tick!` once
-- [ ] Calls `ppu-tick!` three times (PPU runs 3x CPU rate)
-- [ ] Calls `apu-tick!` once (APU runs at CPU rate)
-- [ ] Returns flags for: frame complete, audio sample ready
+### 2.1 Master Clock ✅
+- [x] Add `nes-tick!` function: advances entire system by 1 CPU cycle
+- [x] Calls `cpu-tick!` once
+- [x] Calls `ppu-tick!` three times (PPU runs 3x CPU rate)
+- [x] Calls `apu-tick!` once (APU runs at CPU rate)
+- [x] Returns instruction completion status for debugging
 
-### 2.2 Replace `nes-step!` with `nes-tick!`
-- [ ] Update `nes-run-frame!` to use `nes-tick!` instead of `nes-step!`
-- [ ] Keep `nes-step!` as convenience wrapper (runs ticks until instruction boundary)
-- [ ] Update debugger/trace to work with cycle granularity
+### 2.2 Dual Mode Support ✅
+- [x] `nes-run-frame-tick!` for Mode B (cycle-interleaved) frame execution
+- [x] `nes-step!` and `nes-run-frame!` kept for Mode A (instruction-stepped)
+- [ ] Update debugger/trace to work with cycle granularity (future)
 
-### 2.3 DMA Integration
-- [ ] OAM DMA: CPU halted for 513-514 cycles, PPU/APU continue
-- [ ] DMC DMA: CPU halted for 4 cycles during sample fetch
-- [ ] DMA cycles should be indistinguishable from CPU cycles to PPU/APU
+### 2.3 DMA Integration ✅
+- [x] OAM DMA: CPU halted for 513-514 cycles, PPU/APU continue
+- [x] DMC DMA: CPU halted for 4 cycles during sample fetch
+- [x] DMA stall counter decremented in `nes-tick!`
 
 ---
 
@@ -205,16 +205,16 @@ INC abs (6 cycles):
   #:transparent)
 ```
 
-### Key Files to Modify
+### Key Files Modified
 
-| File | Changes |
-|------|---------|
-| `lib/6502/cpu.rkt` | Add `cpu-tick!`, instruction state tracking |
-| `lib/6502/opcodes.rkt` | Convert to microcode table or cycle state machine |
-| `nes/system.rkt` | Add `nes-tick!`, update `nes-step!` to use it |
-| `nes/ppu/ppu.rkt` | Verify register timing accuracy |
-| `nes/apu/apu.rkt` | Verify frame counter timing |
-| `main.rkt` | Update frame loop if needed |
+| File | Status | Changes |
+|------|--------|---------|
+| `lib/6502/cycle-cpu.rkt` | ✅ NEW | Cycle-stepped CPU with `cpu-tick!`, ~1600 lines |
+| `lib/6502/cpu.rkt` | ✅ | Added `cycle-box`, `instr-state-box` fields |
+| `nes/system.rkt` | ✅ | Added `nes-tick!`, `nes-run-frame-tick!` |
+| `nes/ppu/ppu.rkt` | 🔲 | Verify register timing accuracy (Phase 3) |
+| `nes/apu/apu.rkt` | 🔲 | Verify frame counter timing (Phase 4) |
+| `main.rkt` | 🔲 | Update frame loop if needed (Phase 5) |
 
 ---
 
