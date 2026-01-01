@@ -163,13 +163,14 @@
         (cond
           [(cpu-nmi-pending? c)
            (set-cpu-nmi-pending! c #f)
-           ;; Set up for NMI sequence (7 cycles)
-           (reset-instr-state! state #x00 7)
+           ;; Set up for NMI sequence (7 cycles, but we use 8 because cycle 1 is the
+           ;; "fetch" cycle that's handled here, then cycles 2-8 are the interrupt sequence)
+           (reset-instr-state! state #x00 8)
            (set-instr-state-data! state 'nmi)]
 
           [(and (cpu-irq-pending? c) (not (cpu-flag? c flag-i)))
            (set-cpu-irq-pending! c #f)
-           (reset-instr-state! state #x00 7)
+           (reset-instr-state! state #x00 8)
            (set-instr-state-data! state 'irq)]
 
           [else
@@ -210,21 +211,25 @@
 ;; Interrupt Cycle Execution
 ;; ============================================================================
 
+;; Interrupt sequence: 7 cycles total
+;; Cycle 1 is handled by cpu-tick! (the "fetch" that detects the interrupt)
+;; So execute-interrupt-cycle! handles cycles 2-8 (really cycles 2-7 of the sequence)
+;; With total-cycles=8, we execute cycles 1-7 here before completion check passes
 (define (execute-interrupt-cycle! c state cycle vector)
   (case cycle
-    [(1) ; Internal operation
+    [(1) ; Cycle 2 of sequence: Internal operation (read and discard)
      (void)]
-    [(2) ; Push PC high
+    [(2) ; Cycle 3: Push PC high
      (cpu-push8! c (hi (cpu-pc c)))]
-    [(3) ; Push PC low
+    [(3) ; Cycle 4: Push PC low
      (cpu-push8! c (lo (cpu-pc c)))]
-    [(4) ; Push P (B flag clear for interrupts)
+    [(4) ; Cycle 5: Push P (B flag clear for interrupts)
      (cpu-push8! c (set-bit (clear-bit (cpu-p c) flag-b) 5))]
-    [(5) ; Fetch vector low
+    [(5) ; Cycle 6: Fetch vector low
      (set-instr-state-addr-lo! state (cpu-read c vector))]
-    [(6) ; Fetch vector high
+    [(6) ; Cycle 7: Fetch vector high
      (set-instr-state-addr-hi! state (cpu-read c (+ vector 1)))]
-    [(7) ; Set PC to vector, set I flag
+    [(7) ; Cycle 8: Set PC to vector, set I flag
      (set-cpu-pc! c (merge16 (instr-state-addr-lo state)
                              (instr-state-addr-hi state)))
      (set-cpu-flag! c flag-i)]))

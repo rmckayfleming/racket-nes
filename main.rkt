@@ -15,6 +15,7 @@
 ;;   --scale <n>          Integer scale factor (default: 3)
 ;;   --test-addr <hex>    Check Blargg test result at address (e.g. 0x6000)
 ;;   --pc <hex>           Override initial PC (e.g. 0xC000 for nestest)
+;;   --accurate           Use cycle-accurate Mode B timing (slower)
 
 (require racket/cmdline
          racket/match
@@ -43,6 +44,7 @@
 (define scale-factor (make-parameter 3))
 (define test-addr (make-parameter #f))
 (define initial-pc (make-parameter #f))
+(define accurate-mode? (make-parameter #f))
 
 ;; Parse hex string like "0x6000" or "6000" or "$6000"
 (define (parse-hex str)
@@ -141,7 +143,10 @@
                          (test-addr (parse-hex addr))]
    [("--pc" "-P") addr
                   "Override initial PC (hex, e.g. 0xC000)"
-                  (initial-pc (parse-hex addr))]))
+                  (initial-pc (parse-hex addr))]
+   [("--accurate" "-A")
+    "Use cycle-accurate Mode B timing (slower but more accurate)"
+    (accurate-mode? #t)]))
 
 ;; Create appropriate mapper for ROM
 (define (create-mapper rom)
@@ -297,8 +302,11 @@
 
         (unless should-quit?
           ;; Run one frame of emulation
-          ;; (Sprite 0 hit is now detected during PPU tick, not after rendering)
-          (nes-run-frame! sys)
+          ;; Mode A: instruction-stepped (faster)
+          ;; Mode B: cycle-interleaved (more accurate)
+          (if (accurate-mode?)
+              (nes-run-frame-tick! sys)
+              (nes-run-frame! sys))
 
           ;; Render background + sprites to framebuffer
           (render-frame! ppu pbus framebuffer)
@@ -344,6 +352,7 @@
   (printf "NES Emulator\n")
   (printf "  ROM: ~a\n" (rom-path))
   (printf "  Headless: ~a\n" (headless?))
+  (printf "  Timing: ~a\n" (if (accurate-mode?) "Mode B (cycle-accurate)" "Mode A (instruction-stepped)"))
   (when (step-limit)
     (printf "  Steps: ~a\n" (step-limit)))
   (when (frame-limit)
