@@ -39,6 +39,9 @@
  ;; Bus access (updates open bus)
  cpu-read cpu-write cpu-read16
 
+ ;; Open bus (for DMA integration)
+ cpu-set-openbus!
+
  ;; Control
  cpu-reset!
  cpu-step!
@@ -171,6 +174,10 @@
 (define (cpu-read16 c addr)
   (merge16 (cpu-read c addr)
            (cpu-read c (u16 (+ addr 1)))))
+
+;; Set open bus value directly (for DMA that bypasses cpu-read)
+(define (cpu-set-openbus! c val)
+  (set-box! (cpu-openbus-box c) (u8 val)))
 
 ;; Read 16-bit with page wrap bug (for JMP indirect)
 (define (cpu-read16-wrap c addr)

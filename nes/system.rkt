@@ -279,6 +279,8 @@
           (when (> dmc-stall 0)
             (set-box! (nes-dma-stall-box sys)
                       (+ (unbox (nes-dma-stall-box sys)) dmc-stall))
+            ;; Update CPU open bus with the fetched byte
+            (cpu-set-openbus! cpu (apu-dmc-last-fetch-byte (nes-apu sys)))
             (apu-clear-dmc-stall-cycles! (nes-apu sys))))
         ;; Audio callback
         (let ([audio-cb (unbox (nes-audio-callback-box sys))])
@@ -308,6 +310,8 @@
           (when (> dmc-stall 0)
             (set-box! (nes-dma-stall-box sys)
                       (+ (unbox (nes-dma-stall-box sys)) dmc-stall))
+            ;; Update CPU open bus with the fetched byte
+            (cpu-set-openbus! cpu (apu-dmc-last-fetch-byte (nes-apu sys)))
             (apu-clear-dmc-stall-cycles! (nes-apu sys))))
 
         ;; OAM DMA handling: when $4014 is written, calculate stall cycles
@@ -380,6 +384,8 @@
         (when (> dmc-stall 0)
           (set-box! (nes-dma-stall-box sys)
                     (+ (unbox (nes-dma-stall-box sys)) dmc-stall))
+          ;; Update CPU open bus with the fetched byte
+          (cpu-set-openbus! cpu (apu-dmc-last-fetch-byte (nes-apu sys)))
           (apu-clear-dmc-stall-cycles! (nes-apu sys)))
         stall-cycles)
 
@@ -425,6 +431,8 @@
         (when (> dmc-stall 0)
           (set-box! (nes-dma-stall-box sys)
                     (+ (unbox (nes-dma-stall-box sys)) dmc-stall))
+          ;; Update CPU open bus with the fetched byte
+          (cpu-set-openbus! cpu (apu-dmc-last-fetch-byte (nes-apu sys)))
           (apu-clear-dmc-stall-cycles! (nes-apu sys)))
 
         ;; NMI edge detection: fire NMI when nmi_output goes LOW->HIGH

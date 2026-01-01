@@ -40,6 +40,8 @@
  apu-dmc-stall-cycles
  apu-clear-dmc-stall-cycles!
  apu-set-memory-reader!
+ apu-dmc-last-fetch-byte    ; Last byte fetched by DMC DMA (for open bus update)
+ apu-dmc-last-fetch-addr    ; Address of last DMC DMA fetch
 
  ;; Audio output
  apu-output            ; Get current mixed audio output (0.0 to 1.0)
@@ -144,6 +146,8 @@
    dmc-timer-box            ; Timer countdown for rate
    dmc-silence-box          ; True if output unit is silenced
    dmc-stall-cycles-box     ; CPU stall cycles from DMC DMA (consumed by system)
+   dmc-last-fetch-byte-box  ; Last byte fetched by DMC DMA (for open bus update)
+   dmc-last-fetch-addr-box  ; Address of last DMC DMA fetch (for bus conflict detection)
 
    ;; ---- Status Register ($4015) ----
    ;; Channel enable flags
@@ -254,6 +258,8 @@
    (box 0)       ; timer
    (box #t)      ; silence
    (box 0)       ; stall cycles
+   (box 0)       ; last fetch byte (for open bus update)
+   (box 0)       ; last fetch addr
 
    ;; Channel enables
    (box #f) (box #f) (box #f) (box #f) (box #f)
@@ -754,6 +760,11 @@
             (define reader (unbox (apu-memory-reader-box ap)))
             (define sample-byte (reader addr))
 
+            ;; Store the fetched byte and address for open bus update
+            ;; The system will use this to update the CPU's data bus
+            (set-box! (apu-dmc-last-fetch-byte-box ap) sample-byte)
+            (set-box! (apu-dmc-last-fetch-addr-box ap) addr)
+
             ;; Load sample buffer
             (set-box! (apu-dmc-sample-buffer-box ap) sample-byte)
             (set-box! (apu-dmc-buffer-empty-box ap) #f)
@@ -1000,6 +1011,14 @@
 ;; Set the memory reader callback for DMC sample fetches
 (define (apu-set-memory-reader! ap reader)
   (set-box! (apu-memory-reader-box ap) reader))
+
+;; Get the last byte fetched by DMC DMA (for updating CPU open bus)
+(define (apu-dmc-last-fetch-byte ap)
+  (unbox (apu-dmc-last-fetch-byte-box ap)))
+
+;; Get the address of the last DMC DMA fetch
+(define (apu-dmc-last-fetch-addr ap)
+  (unbox (apu-dmc-last-fetch-addr-box ap)))
 
 ;; ============================================================================
 ;; Audio Output
