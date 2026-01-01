@@ -18,6 +18,7 @@ test/roms/*.nes
 test/roms/*.NES
 test/roms/nes-test-roms/
 test/roms/nes-audio-tests/
+test/roms/accuracy-coin/
 
 # Save files
 *.sav

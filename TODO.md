@@ -1,243 +1,201 @@
-# TODO.md — Mode B (Cycle-Accurate) Emulation
+# TODO.md — NES Emulator Accuracy Improvements
 
-This document tracks the migration from Mode A (instruction-stepped) to Mode B (cycle-interleaved) emulation. Mode B is required to pass timing-sensitive tests like ppu_vbl_nmi tests 02, 05-10 and apu_test jitter tests.
+This document tracks work needed to improve emulator accuracy, primarily driven by AccuracyCoin test results.
 
-## Background
+## Current Status
 
-**Mode A (Current):** CPU executes one full instruction, then PPU/APU catch up by the number of cycles consumed.
+**AccuracyCoin Results (Mode A):** 83 passed, 46 failed, 5 draw
+**AccuracyCoin Results (Mode B):** 69 passed, 61 failed, 5 draw
 
-**Mode B (Target):** CPU, PPU, and APU advance one cycle at a time, interleaved. This allows mid-instruction register reads to see correct PPU state.
+Mode B has 15 additional failures, primarily in illegal opcode page-crossing timing.
 
-## Why Mode B?
-
-Several test failures require cycle-level precision:
-- `02-vbl_set_time.nes` — VBlank flag must be set at exact PPU cycle
-- `05-nmi_timing.nes` through `08-nmi_off_timing.nes` — NMI edge detection timing
-- `09-even_odd_frames.nes`, `10-even_odd_timing.nes` — Odd frame skip relative to rendering enable
-- APU jitter tests — Frame IRQ timing precision
-
----
-
-## Phase 1: CPU Cycle Decomposition ✅ COMPLETE
-
-Break instruction execution into per-cycle steps. Each cycle performs one bus operation.
-
-### 1.1 Instruction Microcode Table ✅
-- [x] Define microcode format: state machine with per-cycle handlers
-- [x] Each handler: address calculation, bus access, register updates
-- [x] Implemented in `lib/6502/cycle-cpu.rkt`
-
-### 1.2 Cycle-Stepped CPU Core ✅
-- [x] Add `cpu-tick!` function that advances CPU by exactly 1 cycle
-- [x] Track current instruction state via `instr-state` struct
-- [x] Uses CPU's `cycle-box` and `instr-state-box` for state tracking
-- [x] Handle interrupt injection between instructions (not mid-instruction)
-
-### 1.3 Addressing Mode Cycle Patterns ✅
-All addressing modes implemented with correct cycle counts:
-- [x] Immediate (2 cycles): fetch opcode, fetch operand
-- [x] Zero Page (3 cycles): fetch opcode, fetch addr, read/write
-- [x] Zero Page,X/Y (4 cycles): fetch opcode, fetch addr, add index, read/write
-- [x] Absolute (4 cycles): fetch opcode, fetch lo, fetch hi, read/write
-- [x] Absolute,X/Y (4-5 cycles): +1 if page crossed on read
-- [x] Indirect,X (6 cycles): fetch opcode, fetch ptr, add X, read lo, read hi, read/write
-- [x] Indirect,Y (5-6 cycles): +1 if page crossed on read
-- [x] Relative (2-4 cycles): branch taken +1, page crossed +1
-
-### 1.4 Instruction-Specific Behaviors ✅
-- [x] Read-modify-write: dummy write of old value before new value (6 cycles)
-- [x] Stack operations: correct push/pull cycle counts
-- [x] JMP indirect: page-wrap bug handled
-- [x] BRK/RTI/interrupts: 7-cycle sequence
+**Primary Test Command:**
+```bash
+PLTCOLLECTS="$PWD:" racket test/harness/accuracy-coin.rkt --failures
+PLTCOLLECTS="$PWD:" racket test/harness/accuracy-coin.rkt --failures --tick  # Mode B
+```
 
 ---
 
-## Phase 2: Unified Tick Architecture ✅ COMPLETE
+## Phase 1: Mode B Regressions (ACTIVE)
 
-Create a master clock that drives all components in lockstep.
+Fix the 15 additional failures that appear in Mode B but not Mode A.
 
-### 2.1 Master Clock ✅
-- [x] Add `nes-tick!` function: advances entire system by 1 CPU cycle
-- [x] Calls `cpu-tick!` once
-- [x] Calls `ppu-tick!` three times (PPU runs 3x CPU rate)
-- [x] Calls `apu-tick!` once (APU runs at CPU rate)
-- [x] Returns instruction completion status for debugging
+### 1.1 Illegal Opcode Page-Crossing Timing
+Mode B fails these but Mode A passes:
+- [ ] $03 SLO INDIRECT'X
+- [ ] $13 SLO INDIRECT'Y
+- [ ] $1B SLO ABSOLUTE'Y
+- [ ] $23 RLA INDIRECT'X
+- [ ] $33 RLA INDIRECT'Y
+- [ ] $3B RLA ABSOLUTE'Y
+- [ ] $43 SRE INDIRECT'X
+- [ ] $53 SRE INDIRECT'Y
+- [ ] $5B SRE ABSOLUTE'Y
+- [ ] $63 RRA INDIRECT'X
+- [ ] $73 RRA INDIRECT'Y
+- [ ] $7B RRA ABSOLUTE'Y
+- [ ] $C3 DCP INDIRECT'X
+- [ ] $D3 DCP INDIRECT'Y
+- [ ] $DB DCP ABSOLUTE'Y
+- [ ] $E3 ISC INDIRECT'X
+- [ ] $F3 ISC INDIRECT'Y
+- [ ] $FB ISC ABSOLUTE'Y
 
-### 2.2 Dual Mode Support ✅
-- [x] `nes-run-frame-tick!` for Mode B (cycle-interleaved) frame execution
-- [x] `nes-step!` and `nes-run-frame!` kept for Mode A (instruction-stepped)
-- [ ] Update debugger/trace to work with cycle granularity (future)
+**Root Cause:** Likely dummy cycle timing on page-crossed indexed reads for read-modify-write illegal ops.
 
-### 2.3 DMA Integration ✅
-- [x] OAM DMA: CPU halted for 513-514 cycles, PPU/APU continue
-- [x] DMC DMA: CPU halted for 4 cycles during sample fetch
-- [x] DMA stall counter decremented in `nes-tick!`
+### 1.2 Instruction Timing
+- [ ] INSTRUCTION TIMING test fails in Mode B only
 
----
-
-## Phase 3: PPU Cycle Precision ✅ PASSING ALL TESTS
-
-PPU timing is accurate enough to pass all ppu_vbl_nmi tests.
-
-### 3.1 Register Read Timing ✅
-- [x] $2002 (PPUSTATUS): VBlank flag cleared on exact read cycle
-- [x] Reading during VBlank set cycle sees flag=0 (suppression works)
-- [x] $2007 (PPUDATA): buffered read behavior per cycle
-
-### 3.2 NMI Edge Detection ✅
-- [x] NMI fires on LOW→HIGH transition of (nmi_occurred AND nmi_output)
-- [x] Edge detection at instruction boundary (sufficient for tests)
-- [x] Suppression: reading $2002 on VBlank set cycle clears nmi_occurred
-
-### 3.3 Odd Frame Skip ✅
-- [x] Skip happens at cycle 0 of pre-render scanline
-- [x] Only when rendering enabled AND odd frame
-- [x] "Rendering enabled" = PPU mask bits checked at cycle 0
-
-### 3.4 Sprite 0 Hit Precision ✅
-- [x] Hit detection happens at specific cycle within scanline
-- [x] Depends on sprite X position and first opaque pixel overlap
-- [x] Per-cycle detection implemented
-
-**Test Results (all pass with both Mode A and Mode B):**
-- 01-vbl_basics ✅
-- 02-vbl_set_time ✅
-- 03-vbl_clear_time ✅
-- 04-nmi_control ✅
-- 05-nmi_timing ✅
-- 06-suppression ✅
-- 07-nmi_on_timing ✅
-- 08-nmi_off_timing ✅
-- 09-even_odd_frames ✅
-- 10-even_odd_timing ✅
+### 1.3 Controller Clocking
+- [ ] CONTROLLER CLOCKING passes in Mode B but fails in Mode A (error 5 → passes)
+  - This is actually a Mode B improvement!
 
 ---
 
-## Phase 4: APU Cycle Precision
+## Phase 2: CPU Timing Issues
 
-APU is already cycle-stepped; verify integration is correct.
+### 2.1 Dummy Read/Write Cycles
+Both modes fail:
+- [ ] DUMMY READ CYCLES (error 1)
+- [ ] DUMMY WRITE CYCLES (error 2)
+- [ ] IMPLIED DUMMY READS (error 2)
 
-### 4.1 Frame Counter Timing
-- [ ] Verify step boundaries match hardware (7457, 14913, 22371, 29829/37281)
-- [ ] IRQ flag set timing relative to CPU reads
-- [ ] 1-cycle delay before IRQ fires after flag set?
+### 2.2 Open Bus Behavior
+- [ ] OPEN BUS (error 1) — CPU open bus emulation
 
-### 4.2 DMC DMA Timing
-- [ ] Sample fetch stalls CPU for exactly 4 cycles
-- [ ] Stall can occur on any CPU cycle, not just instruction boundary
-- [ ] Verify stall cycle counting is correct
+### 2.3 Unofficial Instructions
+- [ ] ALL NOP INSTRUCTIONS (error 2) — Unofficial NOP timing
 
-### 4.3 Length Counter / Envelope Timing
-- [ ] Length counter halt checked on correct frame step
-- [ ] Envelope divider clocked at quarter frame
-- [ ] Linear counter (triangle) behavior
+### 2.4 JSR Edge Cases
+- [ ] JSR EDGE CASES (error 2) — Stack timing edge cases
+
+### 2.5 SHA/SHX/SHY/SHS Illegal Opcodes
+These "unstable" opcodes have complex AND behavior:
+- [ ] $93 SHA INDIRECT'Y (error 0)
+- [ ] $9F SHA ABSOLUTE'Y (error 0)
+- [ ] $9B SHS ABSOLUTE'Y (error 1)
+- [ ] $9C SHY ABSOLUTE'X (error 1)
+- [ ] $9E SHX ABSOLUTE'Y (error 1)
 
 ---
 
-## Phase 5: Testing & Validation ✅ CORE TESTS PASSING
+## Phase 3: Interrupt Handling
 
-### 5.1 Regression Testing ✅
-- [x] All CPU instruction tests still pass (nestest 5003 steps)
-- [x] PPU tests pass
+### 3.1 NMI/IRQ Overlap
+- [ ] NMI OVERLAP BRK (error 2) — NMI during BRK instruction
+- [ ] NMI OVERLAP IRQ (error 1) — NMI during IRQ handling
+
+### 3.2 Interrupt Flag Latency
+- [ ] INTERRUPT FLAG LATENCY (error 2) — I flag timing after SEI/CLI
+
+---
+
+## Phase 4: DMA Timing
+
+### 4.1 OAM DMA Conflicts
+- [ ] DMA + OPEN BUS (error 1) — Open bus during DMA
+- [ ] DMA + $2007 READ (error 2) — DMA during VRAM read
+- [ ] DMA + $2007 WRITE (error 1) — DMA during VRAM write
+- [ ] DMA + $4015 READ (error 2) — DMA during APU status read
+- [ ] DMA + $4016 READ (error 1) — DMA during controller read
+
+### 4.2 DMC DMA
+- [ ] DMC DMA BUS CONFLICTS (error 2) — DMC DMA bus behavior
+- [ ] DMC DMA + OAM DMA (error 1) — DMC/OAM DMA interaction
+
+### 4.3 DMA Abort
+- [ ] EXPLICIT DMA ABORT (error 1)
+- [ ] IMPLICIT DMA ABORT (error 1)
+
+---
+
+## Phase 5: APU Timing
+
+### 5.1 Frame Counter
+- [ ] FRAME COUNTER IRQ (error 6) — IRQ timing
+- [ ] FRAME COUNTER 4-STEP (error 1) — 4-step mode timing
+- [ ] FRAME COUNTER 5-STEP (error 1) — 5-step mode timing
+
+### 5.2 DMC
+- [ ] DELTA MODULATION CHANNEL (error 0) — DMC implementation
+
+### 5.3 Register Timing
+- [ ] APU REGISTER ACTIVATION (error 1) — Register enable timing
+
+---
+
+## Phase 6: Controller Timing
+
+- [ ] CONTROLLER STROBING (error 3) — Strobe timing precision
+- [ ] CONTROLLER CLOCKING (error 5 in Mode A, passes in Mode B)
+
+---
+
+## Phase 7: PPU Accuracy
+
+### 7.1 Register Behavior
+- [ ] PPU REGISTER OPEN BUS (error 4) — Open bus decay timing
+- [ ] PALETTE RAM QUIRKS (error 5) — Palette mirroring/behavior
+
+### 7.2 VBlank/NMI
+- [ ] VBLANK BEGINNING (error 1) — VBlank set timing
+- [ ] NMI TIMING (error 1) — NMI edge timing
+- [ ] NMI SUPPRESSION (error 1) — Suppression window
+- [ ] NMI DISABLED AT VBLANK (error 1) — NMI enable at VBlank edge
+
+### 7.3 Rendering
+- [ ] RENDERING FLAG BEHAVIOR (error 1) — BG/sprite enable timing
+- [ ] ATTRIBUTES AS TILES (error 1) — Attribute table rendering
+- [ ] STALE BG SHIFT REGISTERS (error 3) — BG shift register reload
+- [ ] BG SERIAL IN (error 2) — BG pattern shift
+
+### 7.4 Sprites
+- [ ] ARBITRARY SPRITE ZERO (error 2) — Sprite 0 hit timing
+- [ ] SPRITES ON SCANLINE 0 (error 2) — Scanline 0 sprite evaluation
+
+### 7.5 OAM
+- [ ] MISALIGNED OAM BEHAVIOR (error 1) — OAM access alignment
+- [ ] ADDRESS $2004 BEHAVIOR (error 1) — OAMDATA read behavior
+- [ ] OAM CORRUPTION (error 2) — OAM corruption during rendering
+- [ ] INC $4014 (error 1) — OAM DMA page increment
+
+---
+
+## Completed Work
+
+### Mode B Infrastructure ✅
+- [x] Cycle-stepped CPU (`lib/6502/cycle-cpu.rkt`)
+- [x] Master tick function (`nes-tick!`)
+- [x] Frame execution (`nes-run-frame-tick!`)
+- [x] DMA integration with cycle stepping
+- [x] All ppu_vbl_nmi tests pass (1-10)
+- [x] nestest 5003 steps pass
 - [x] 205 unit tests pass
 
-### 5.2 New Test Coverage ✅
-All ppu_vbl_nmi tests now pass:
-- [x] `01-vbl_basics.nes` — PASS
-- [x] `02-vbl_set_time.nes` — PASS
-- [x] `03-vbl_clear_time.nes` — PASS
-- [x] `04-nmi_control.nes` — PASS
-- [x] `05-nmi_timing.nes` — PASS
-- [x] `06-suppression.nes` — PASS
-- [x] `07-nmi_on_timing.nes` — PASS
-- [x] `08-nmi_off_timing.nes` — PASS
-- [x] `09-even_odd_frames.nes` — PASS
-- [x] `10-even_odd_timing.nes` — PASS
-- [ ] APU `4-jitter.nes` — TODO
-
-### 5.3 Performance Benchmarking
-- [ ] Measure frames/second before and after Mode B
-- [ ] Profile hot paths (expect `nes-tick!` to be critical)
-- [x] Fast-path exists: `nes-step-fast!` / `nes-run-frame-fast!`
+### AccuracyCoin Harness ✅
+- [x] Automatic test execution
+- [x] Screen parsing for results
+- [x] Mode A/B support
+- [x] PASS/FAIL/DRAW detection
+- [x] Detailed failure reporting
 
 ---
 
-## Phase 6: Optional Enhancements
+## Priority Order
 
-### 6.1 Debugger Updates
-- [ ] Step by cycle instead of instruction
-- [ ] Show current instruction cycle number
-- [ ] Breakpoints on PPU scanline/cycle
-
-### 6.2 Hybrid Mode
-- [ ] Fast mode: skip cycle-accurate PPU rendering
-- [ ] Accurate mode: full cycle interleaving
-- [ ] Per-frame or per-scanline mode switching for games that need it
-
----
-
-## Implementation Notes
-
-### CPU Microcode Example
-
-```
-LDA #imm (2 cycles):
-  Cycle 1: Fetch opcode, decode
-  Cycle 2: Fetch operand, load A, set N/Z
-
-LDA abs,X (4-5 cycles):
-  Cycle 1: Fetch opcode
-  Cycle 2: Fetch addr lo
-  Cycle 3: Fetch addr hi
-  Cycle 4: Read from addr+X (if no page cross, load A)
-  Cycle 5: Read from correct addr (if page crossed, load A)
-
-STA abs (4 cycles):
-  Cycle 1: Fetch opcode
-  Cycle 2: Fetch addr lo
-  Cycle 3: Fetch addr hi
-  Cycle 4: Write A to addr
-
-INC abs (6 cycles):
-  Cycle 1: Fetch opcode
-  Cycle 2: Fetch addr lo
-  Cycle 3: Fetch addr hi
-  Cycle 4: Read value
-  Cycle 5: Write value (dummy)
-  Cycle 6: Write value+1
-```
-
-### State Machine Approach
-
-```racket
-;; Possible states for cycle-stepped CPU
-(struct cpu-instr-state
-  (opcode          ; Current opcode being executed
-   cycle           ; Which cycle of instruction (1-based)
-   addr-lo         ; Low byte of address
-   addr-hi         ; High byte of address
-   data            ; Intermediate data
-   effective-addr) ; Calculated effective address
-  #:transparent)
-```
-
-### Key Files Modified
-
-| File | Status | Changes |
-|------|--------|---------|
-| `lib/6502/cycle-cpu.rkt` | ✅ NEW | Cycle-stepped CPU with `cpu-tick!`, ~1600 lines |
-| `lib/6502/cpu.rkt` | ✅ | Added `cycle-box`, `instr-state-box` fields |
-| `nes/system.rkt` | ✅ | Added `nes-tick!`, `nes-run-frame-tick!` |
-| `nes/ppu/ppu.rkt` | 🔲 | Verify register timing accuracy (Phase 3) |
-| `nes/apu/apu.rkt` | 🔲 | Verify frame counter timing (Phase 4) |
-| `main.rkt` | 🔲 | Update frame loop if needed (Phase 5) |
+1. **Phase 1** — Mode B regressions (get Mode B to parity with Mode A)
+2. **Phase 4** — DMA timing (affects many games)
+3. **Phase 3** — Interrupt handling (affects game compatibility)
+4. **Phase 6** — Controller timing (affects input responsiveness)
+5. **Phase 7** — PPU accuracy (affects visual correctness)
+6. **Phase 2** — CPU timing (edge cases)
+7. **Phase 5** — APU timing (affects audio)
 
 ---
 
 ## References
 
-- https://www.nesdev.org/wiki/CPU — CPU timing details
-- https://www.nesdev.org/wiki/PPU_rendering — PPU cycle-by-cycle
-- https://www.nesdev.org/wiki/APU_Frame_Counter — APU timing
-- https://www.nesdev.org/wiki/PPU_registers — Register read/write timing
-- Visual 6502 — Cycle-accurate behavior verification
+- AccuracyCoin: https://github.com/100thCoin/AccuracyCoin
+- nesdev wiki: https://www.nesdev.org/wiki/
+- Visual 6502 for cycle-accurate verification

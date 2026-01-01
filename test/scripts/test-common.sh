@@ -39,6 +39,7 @@ run_test() {
     output=$(PLTCOLLECTS="$PROJECT_DIR:" /opt/homebrew/bin/racket "$PROJECT_DIR/main.rkt" \
         --rom "$rom" \
         --headless \
+        --accurate
         --frames "$frames" \
         --test-addr 0x6000 2>&1)
     local exit_code=$?
