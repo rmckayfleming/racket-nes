@@ -53,6 +53,7 @@
             [else mirroring-vertical]))))
 
   ;; --- CPU Read ($4020-$FFFF) ---
+  ;; Returns #f for unmapped regions (caller should use open bus)
   (define (cpu-read addr)
     (cond
       ;; $6000-$7FFF: PRG RAM
@@ -66,8 +67,8 @@
        (define mask (if (= prg-size #x4000) #x3FFF #x7FFF))
        (bytes-ref prg-rom (bitwise-and (- addr #x8000) mask))]
 
-      ;; $4020-$5FFF: Expansion ROM (not used by NROM)
-      [else #x00]))
+      ;; $4020-$5FFF: Expansion ROM (not used by NROM) - return open bus
+      [else #f]))
 
   ;; --- CPU Write ($4020-$FFFF) ---
   (define (cpu-write addr val)

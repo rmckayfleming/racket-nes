@@ -15,7 +15,6 @@
 ;;   --scale <n>          Integer scale factor (default: 3)
 ;;   --test-addr <hex>    Check Blargg test result at address (e.g. 0x6000)
 ;;   --pc <hex>           Override initial PC (e.g. 0xC000 for nestest)
-;;   --accurate           Use cycle-accurate Mode B timing (slower)
 
 (require racket/cmdline
          racket/match
@@ -44,7 +43,6 @@
 (define scale-factor (make-parameter 3))
 (define test-addr (make-parameter #f))
 (define initial-pc (make-parameter #f))
-(define accurate-mode? (make-parameter #f))
 
 ;; Parse hex string like "0x6000" or "6000" or "$6000"
 (define (parse-hex str)
@@ -143,10 +141,7 @@
                          (test-addr (parse-hex addr))]
    [("--pc" "-P") addr
                   "Override initial PC (hex, e.g. 0xC000)"
-                  (initial-pc (parse-hex addr))]
-   [("--accurate" "-A")
-    "Use cycle-accurate Mode B timing (slower but more accurate)"
-    (accurate-mode? #t)]))
+                  (initial-pc (parse-hex addr))]))
 
 ;; Create appropriate mapper for ROM
 (define (create-mapper rom)
@@ -184,22 +179,22 @@
                        [else (raise e)]))])
     (cond
       [(step-limit)
-       ;; Run for N steps (use fast mode - no PPU graphics, minimal timing)
+       ;; Run for N steps
        (for ([_ (in-range (step-limit))])
-         (nes-step-fast! sys))
+         (nes-step! sys))
        (printf "Completed ~a steps.\n" (step-limit))]
 
       [(frame-limit)
-       ;; Run for N frames (use fast mode - no PPU graphics, minimal timing)
+       ;; Run for N frames
        (for ([_ (in-range (frame-limit))])
-         (nes-run-frame-fast! sys))
+         (nes-run-frame! sys))
        (printf "Completed ~a frames.\n" (frame-limit))]
 
       [else
        ;; Run forever (or until something stops it)
        (printf "Running indefinitely (Ctrl+C to stop)...\n")
        (let loop ()
-         (nes-step-fast! sys)
+         (nes-step! sys)
          (loop))]))
 
   (when halted-early
@@ -302,11 +297,8 @@
 
         (unless should-quit?
           ;; Run one frame of emulation
-          ;; Mode A: instruction-stepped (faster)
-          ;; Mode B: cycle-interleaved (more accurate)
-          (if (accurate-mode?)
-              (nes-run-frame-tick! sys)
-              (nes-run-frame! sys))
+          ;; Always use full cycle-accurate execution for video mode
+          (nes-run-frame! sys)
 
           ;; Render background + sprites to framebuffer
           (render-frame! ppu pbus framebuffer)
@@ -352,7 +344,7 @@
   (printf "NES Emulator\n")
   (printf "  ROM: ~a\n" (rom-path))
   (printf "  Headless: ~a\n" (headless?))
-  (printf "  Timing: ~a\n" (if (accurate-mode?) "Mode B (cycle-accurate)" "Mode A (instruction-stepped)"))
+  (printf "  Timing: cycle-accurate\n")
   (when (step-limit)
     (printf "  Steps: ~a\n" (step-limit)))
   (when (frame-limit)

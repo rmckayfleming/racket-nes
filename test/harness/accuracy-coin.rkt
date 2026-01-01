@@ -25,7 +25,6 @@
 ;;   PLTCOLLECTS="$PWD:" racket test/harness/accuracy-coin.rkt [options]
 ;;
 ;; Options:
-;;   --tick       Use Mode B (cycle-accurate) timing instead of Mode A
 ;;   --detailed   Show all test results (not just failures)
 ;;   --failures   Show only failures (implies --detailed)
 ;;   --frames N   Run for N frames (default: 3000, about 50 seconds at 60fps)
@@ -59,7 +58,6 @@
 ;; Returns the NES system after execution
 (define (run-accuracy-coin rom-path
                            #:frames [frames 3000]
-                           #:mode [mode 'step]
                            #:verbose? [verbose? #t])
   (define rom (load-rom rom-path))
   (define mapper (create-mapper rom))
@@ -69,7 +67,6 @@
   (when verbose?
     (printf "AccuracyCoin Test Harness\n")
     (printf "ROM: ~a\n" rom-path)
-    (printf "Mode: ~a\n" (if (eq? mode 'tick) "B (cycle-accurate)" "A (instruction-stepped)"))
     (printf "Running for ~a frames (~a seconds)...\n"
             frames (exact->inexact (/ frames 60))))
 
@@ -100,9 +97,7 @@
        (printf "Frame ~a/~a...\n" frame frames)])
 
     ;; Run one frame
-    (case mode
-      [(step) (nes-run-frame! sys)]
-      [(tick) (nes-run-frame-tick! sys)]))
+    (nes-run-frame! sys))
 
   (define end-time (current-inexact-milliseconds))
   (define elapsed-ms (- end-time start-time))
@@ -486,37 +481,30 @@
   #f)
 
 ;; Press right button for one frame cycle
-(define (press-right! sys #:mode [mode 'step])
+(define (press-right! sys)
   (define ctrl1 (nes-controller1 sys))
   (controller-set-button! ctrl1 BUTTON-RIGHT #t)
-  (case mode
-    [(step) (nes-run-frame! sys) (nes-run-frame! sys)]
-    [(tick) (nes-run-frame-tick! sys) (nes-run-frame-tick! sys)])
+  (nes-run-frame! sys)
+  (nes-run-frame! sys)
   (controller-set-button! ctrl1 BUTTON-RIGHT #f)
   ;; Wait for screen to update - increase wait time for reliability
   (for ([_ (in-range 15)])
-    (case mode
-      [(step) (nes-run-frame! sys)]
-      [(tick) (nes-run-frame-tick! sys)])))
+    (nes-run-frame! sys)))
 
 ;; Press start button for one frame cycle
-(define (press-start! sys #:mode [mode 'step])
+(define (press-start! sys)
   (define ctrl1 (nes-controller1 sys))
   (controller-set-button! ctrl1 BUTTON-START #t)
-  (case mode
-    [(step) (nes-run-frame! sys) (nes-run-frame! sys)]
-    [(tick) (nes-run-frame-tick! sys) (nes-run-frame-tick! sys)])
+  (nes-run-frame! sys)
+  (nes-run-frame! sys)
   (controller-set-button! ctrl1 BUTTON-START #f)
   ;; Wait for response - need longer wait for screen transitions
   (for ([_ (in-range 10)])
-    (case mode
-      [(step) (nes-run-frame! sys)]
-      [(tick) (nes-run-frame-tick! sys)])))
+    (nes-run-frame! sys)))
 
 ;; Run tests and collect detailed results from all pages
 ;; Returns a hash with 'tests (list of test hashes), 'passed, 'failed, 'total
 (define (run-and-collect-all-results rom-path
-                                      #:mode [mode 'step]
                                       #:verbose? [verbose? #t])
   (define rom (load-rom rom-path))
   (define mapper (create-mapper rom))
@@ -525,37 +513,30 @@
 
   (when verbose?
     (printf "AccuracyCoin Detailed Test Harness\n")
-    (printf "ROM: ~a\n" rom-path)
-    (printf "Mode: ~a\n" (if (eq? mode 'tick) "B (cycle-accurate)" "A (instruction-stepped)")))
+    (printf "ROM: ~a\n" rom-path))
 
   ;; Boot and wait
   (when verbose? (printf "Booting...\n"))
   (for ([_ (in-range 60)])
-    (case mode
-      [(step) (nes-run-frame! sys)]
-      [(tick) (nes-run-frame-tick! sys)]))
+    (nes-run-frame! sys))
 
   ;; Press Start to run all tests
   (when verbose? (printf "Running all tests...\n"))
-  (press-start! sys #:mode mode)
+  (press-start! sys)
 
   ;; Wait for tests to complete (about 50 seconds = 3000 frames)
   (for ([frame (in-range 2900)])
     (when (and verbose? (= (modulo frame 500) 0))
       (printf "Frame ~a/2900...\n" frame))
-    (case mode
-      [(step) (nes-run-frame! sys)]
-      [(tick) (nes-run-frame-tick! sys)]))
+    (nes-run-frame! sys))
 
   ;; Now press Start again to go back to page 1 of results
   (when verbose? (printf "Navigating to results pages...\n"))
-  (press-start! sys #:mode mode)
+  (press-start! sys)
 
   ;; Wait longer for the page to render (screen transition takes ~60 frames)
   (for ([_ (in-range 60)])
-    (case mode
-      [(step) (nes-run-frame! sys)]
-      [(tick) (nes-run-frame-tick! sys)]))
+    (nes-run-frame! sys))
 
   ;; Collect results from all 20 pages
   (define all-tests '())
@@ -571,7 +552,7 @@
 
     ;; Go to next page (unless last page)
     (when (< page 19)
-      (press-right! sys #:mode mode)))
+      (press-right! sys)))
 
   ;; Calculate summary
   (define passed (count (λ (t) (eq? (hash-ref t 'status) 'pass)) all-tests))
@@ -596,7 +577,7 @@
 
 ;; Get detailed results from the current system state
 ;; (Assumes tests have been run and we're on page 1)
-(define (get-detailed-results sys #:verbose? [verbose? #f] #:mode [mode 'step])
+(define (get-detailed-results sys #:verbose? [verbose? #f])
   ;; Collect from all pages
   (define all-tests '())
 
@@ -605,7 +586,7 @@
     (define page-tests (parse-current-page sys))
     (set! all-tests (append all-tests page-tests))
     (when (< page 19)
-      (press-right! sys #:mode mode)))
+      (press-right! sys)))
 
   (define passed (count (λ (t) (eq? (hash-ref t 'status) 'pass)) all-tests))
   (define failed (count (λ (t) (eq? (hash-ref t 'status) 'fail)) all-tests))
@@ -631,34 +612,23 @@
       ;; Run 120 frames (2 seconds) - enough to boot and start tests
       (define sys (run-accuracy-coin rom-path
                                      #:frames 120
-                                     #:mode 'step
                                      #:verbose? #f))
       (check-true (nes? sys))
       (check-true (> (nes-frame-count sys) 0))))
-
-  (test-case "accuracy-coin Mode B runs without error"
-    (when (file-exists? rom-path)
-      ;; Test cycle-accurate mode
-      (define sys (run-accuracy-coin rom-path
-                                     #:frames 60
-                                     #:mode 'tick
-                                     #:verbose? #f))
-      (check-true (nes? sys))))
 
   (test-case "accuracy-coin full run parses results"
     (when (file-exists? rom-path)
       ;; Run full test suite and verify we can parse results
       (define sys (run-accuracy-coin rom-path
                                      #:frames 3000
-                                     #:mode 'step
                                      #:verbose? #f))
       (define results (get-test-results sys))
       (check-true (hash? results))
       (check-true (number? (hash-ref results 'passed)))
       (check-true (number? (hash-ref results 'total)))
       (check-equal? (hash-ref results 'total) 131)
-      ;; Mode A should pass at least 80 tests currently
-      (check-true (>= (hash-ref results 'passed) 80)))))
+      ;; Should pass at least 85 tests currently
+      (check-true (>= (hash-ref results 'passed) 85)))))
 
 ;; ============================================================================
 ;; Main
@@ -669,7 +639,6 @@
 
   (define rom-path (make-parameter "test/roms/accuracy-coin/AccuracyCoin.nes"))
   (define frames (make-parameter 3000))
-  (define tick-mode? (make-parameter #f))
   (define detailed? (make-parameter #f))
   (define show-failures-only? (make-parameter #f))
 
@@ -678,20 +647,18 @@
    #:once-each
    [("--rom" "-r") path "ROM file path" (rom-path path)]
    [("--frames" "-f") n "Number of frames to run" (frames (string->number n))]
-   [("--tick" "-t") "Use Mode B (tick) instead of Mode A (step)" (tick-mode? #t)]
    [("--detailed" "-d") "Parse and show detailed test results" (detailed? #t)]
-   [("--failures" "-F") "Show only failures (implies --detailed)" (begin (detailed? #t) (show-failures-only? #t))])
+   [("--failures" "-F") "Show only failures (implies --detailed)" (begin (detailed? #t) (show-failures-only? #t))]
+   ;; Accept --tick for backwards compatibility but ignore it
+   [("--tick" "-t") "Ignored (cycle-accurate mode is now default)" (void)])
 
   (unless (file-exists? (rom-path))
     (eprintf "Error: ROM not found: ~a\n" (rom-path))
     (exit 1))
 
-  (define mode (if (tick-mode?) 'tick 'step))
-
   (if (detailed?)
       ;; Detailed mode: collect results from all pages
       (let ([results (run-and-collect-all-results (rom-path)
-                                                   #:mode mode
                                                    #:verbose? #t)])
         (printf "\n")
 
@@ -728,7 +695,6 @@
       ;; Simple mode: just run and parse summary
       (let ([sys (run-accuracy-coin (rom-path)
                                     #:frames (frames)
-                                    #:mode mode
                                     #:verbose? #t)])
         (printf "\n--- Test Results ---\n")
         (define results (get-test-results sys))

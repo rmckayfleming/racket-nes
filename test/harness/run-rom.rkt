@@ -40,37 +40,29 @@
     [else
      (error 'create-mapper "Unsupported mapper ~a" mapper-num)]))
 
-;; Run a ROM for a given number of CPU steps
+;; Run a ROM for a given number of CPU steps (instructions)
 ;; Returns the final NES state
-(define (run-rom-steps rom-path steps #:trace? [trace? #f] #:mode [mode 'step])
+(define (run-rom-steps rom-path steps #:trace? [trace? #f])
   (define rom (load-rom rom-path))
   (define mapper (create-mapper rom))
   (define sys (make-nes mapper))
   (nes-reset! sys)
 
   (for ([_ (in-range steps)])
-    (case mode
-      [(step) (nes-step! sys)]
-      [(tick)
-       ;; In tick mode, we tick until an instruction completes
-       (let loop ()
-         (unless (nes-tick! sys)
-           (loop)))]))
+    (nes-step! sys))
 
   sys)
 
 ;; Run a ROM for a given number of frames
 ;; Returns the final NES state
-(define (run-rom-frames rom-path frames #:trace? [trace? #f] #:mode [mode 'step])
+(define (run-rom-frames rom-path frames #:trace? [trace? #f])
   (define rom (load-rom rom-path))
   (define mapper (create-mapper rom))
   (define sys (make-nes mapper))
   (nes-reset! sys)
 
   (for ([_ (in-range frames)])
-    (case mode
-      [(step) (nes-run-frame! sys)]
-      [(tick) (nes-run-frame-tick! sys)]))
+    (nes-run-frame! sys))
 
   sys)
 
@@ -78,11 +70,10 @@
 (define (run-rom rom-path
                  #:steps [steps #f]
                  #:frames [frames #f]
-                 #:trace? [trace? #f]
-                 #:mode [mode 'step])
+                 #:trace? [trace? #f])
   (cond
-    [steps (run-rom-steps rom-path steps #:trace? trace? #:mode mode)]
-    [frames (run-rom-frames rom-path frames #:trace? trace? #:mode mode)]
+    [steps (run-rom-steps rom-path steps #:trace? trace?)]
+    [frames (run-rom-frames rom-path frames #:trace? trace?)]
     [else (error 'run-rom "Must specify either #:steps or #:frames")]))
 
 ;; Read a string from $6004 until null terminator
@@ -113,8 +104,7 @@
 ;; Run a test ROM until completion or timeout
 ;; Returns (values status message)
 (define (run-test-rom rom-path
-                      #:max-frames [max-frames 600]  ; 10 seconds at 60fps
-                      #:mode [mode 'step])
+                      #:max-frames [max-frames 600])  ; 10 seconds at 60fps
   (define rom (load-rom rom-path))
   (define mapper (create-mapper rom))
   (define sys (make-nes mapper))
@@ -128,9 +118,7 @@
                                    max-frames status message)))
         ;; Run one frame
         (begin
-          (case mode
-            [(step) (nes-run-frame! sys)]
-            [(tick) (nes-run-frame-tick! sys)])
+          (nes-run-frame! sys)
 
           ;; Check status
           (let-values ([(status message) (get-test-result sys)])
@@ -156,7 +144,6 @@
   (define frames (make-parameter #f))
   (define trace? (make-parameter #f))
   (define test-mode? (make-parameter #f))
-  (define tick-mode? (make-parameter #f))
 
   (command-line
    #:program "run-rom"
@@ -166,17 +153,16 @@
    [("--frames" "-f") n "Number of frames" (frames (string->number n))]
    [("--trace" "-t") "Enable trace output" (trace? #t)]
    [("--test") "Run as test ROM (check $6000 for result)" (test-mode? #t)]
-   [("--tick") "Use Mode B (tick) instead of Mode A (step)" (tick-mode? #t)])
+   ;; Accept --tick for backwards compatibility but ignore it
+   [("--tick") "Ignored (cycle-accurate mode is now default)" (void)])
 
   (unless (rom-path)
     (eprintf "Error: --rom is required\n")
     (exit 1))
 
-  (define mode (if (tick-mode?) 'tick 'step))
-
   (if (test-mode?)
       ;; Run as test ROM
-      (let-values ([(status message) (run-test-rom (rom-path) #:mode mode)])
+      (let-values ([(status message) (run-test-rom (rom-path))])
         (printf "~a: ~a\n" status message)
         (exit (if (eq? status 'passed) 0 1)))
       ;; Run for specified steps/frames
@@ -184,6 +170,5 @@
         (run-rom (rom-path)
                  #:steps (steps)
                  #:frames (frames)
-                 #:trace? (trace?)
-                 #:mode mode)
+                 #:trace? (trace?))
         (printf "Completed\n"))))

@@ -60,8 +60,8 @@
       [(>= addr #x8000)
        (bytes-ref prg-rom (bitwise-and (- addr #x8000) prg-mask))]
 
-      ;; $4020-$7FFF: Not used by CNROM
-      [else #x00]))
+      ;; $4020-$7FFF: Not used by CNROM - return open bus
+      [else #f]))
 
   ;; --- CPU Write ($4020-$FFFF) ---
   (define (cpu-write addr val)

@@ -5,19 +5,10 @@
 ;; The main NES emulator orchestration. Ties together CPU, PPU, APU,
 ;; memory map, and mapper into a cohesive system.
 ;;
-;; Two timing modes are available:
-;;
-;; Mode A - Instruction-Stepped (nes-step!):
-;; - Execute one complete CPU instruction
-;; - Tick PPU by (cpu-cycles * 3) - PPU runs 3x faster
-;; - Tick APU by cpu-cycles
-;; - Faster but less accurate; suitable for most games
-;;
-;; Mode B - Cycle-Interleaved (nes-tick!):
-;; - Execute one CPU cycle
-;; - Tick PPU by 3 cycles
-;; - Tick APU by 1 cycle
-;; - Cycle-accurate; required for timing-sensitive games
+;; Execution is cycle-accurate:
+;; - nes-tick! executes one CPU cycle, ticks PPU by 3, APU by 1
+;; - nes-step! executes ticks until one instruction completes
+;; - nes-run-frame! runs until the next frame boundary
 ;;
 ;; Reference: https://www.nesdev.org/wiki/Cycle_reference_chart
 
@@ -41,12 +32,9 @@
  nes-set-audio-callback!  ; Set callback for audio samples
 
  ;; Execution
- nes-tick!          ; Execute one CPU cycle (Mode B - cycle-interleaved)
- nes-step!          ; Execute one CPU instruction (Mode A - instruction-stepped)
- nes-step-fast!     ; Fast step for headless mode (minimal PPU/APU)
- nes-run-frame!     ; Run until next frame boundary (Mode A)
- nes-run-frame-tick! ; Run until next frame boundary (Mode B)
- nes-run-frame-fast! ; Fast frame for headless mode
+ nes-tick!          ; Execute one CPU cycle (cycle-accurate)
+ nes-step!          ; Execute one CPU instruction (calls nes-tick! internally)
+ nes-run-frame!     ; Run until next frame boundary
  nes-reset!         ; Reset the system
 
  ;; State
@@ -198,6 +186,12 @@
   (nes-memory-set-apu-write! mem
     (λ (addr val)
       (apu-write! ap addr val)))
+
+  ;; Connect open bus handler - returns last value read by CPU
+  ;; This is used for unmapped memory regions ($4018-$401F)
+  (nes-memory-set-openbus-read! mem
+    (λ ()
+      (cpu-openbus cpu)))
 
   ;; Create the system
   (define sys
@@ -354,131 +348,25 @@
         instr-done?)))
 
 ;; ============================================================================
-;; Execution - Mode A (Instruction-Stepped)
+;; Execution - Instruction-Level (wraps nes-tick!)
 ;; ============================================================================
 
-;; Execute one CPU instruction (or consume DMA stall cycles)
+;; Execute one CPU instruction by running ticks until instruction completes
 ;; Returns the number of cycles consumed
 (define (nes-step! sys)
-  (define cpu (nes-cpu sys))
-  (define p (nes-ppu sys))
-  (define dma-stall (unbox (nes-dma-stall-box sys)))
+  (define cycles-before (nes-total-cycles sys))
 
-  ;; If there are DMA stall cycles pending, consume them instead of executing
-  (if (> dma-stall 0)
-      ;; DMA stall: consume stall cycles, tick PPU, no CPU execution
-      (let ([stall-cycles (min dma-stall 1)])  ; Process 1 cycle at a time for accuracy
-        (set-box! (nes-dma-stall-box sys) (- dma-stall stall-cycles))
-        (set-box! (nes-total-cycles-box sys)
-                  (+ (unbox (nes-total-cycles-box sys)) stall-cycles))
-        ;; Tick PPU by stall cycles * 3
-        (ppu-tick! sys (* stall-cycles 3))
-        ;; Tick APU by stall cycles (APU runs at CPU clock rate)
-        (apu-tick! (nes-apu sys) stall-cycles)
-        ;; Call audio callback if set
-        (define audio-cb (unbox (nes-audio-callback-box sys)))
-        (when audio-cb
-          (audio-cb (apu-output (nes-apu sys)) stall-cycles))
-        ;; Check for DMC DMA stall cycles and add to stall counter
-        (define dmc-stall (apu-dmc-stall-cycles (nes-apu sys)))
-        (when (> dmc-stall 0)
-          (set-box! (nes-dma-stall-box sys)
-                    (+ (unbox (nes-dma-stall-box sys)) dmc-stall))
-          ;; Update CPU open bus with the fetched byte
-          (cpu-set-openbus! cpu (apu-dmc-last-fetch-byte (nes-apu sys)))
-          (apu-clear-dmc-stall-cycles! (nes-apu sys)))
-        stall-cycles)
+  ;; Print trace if enabled (before instruction starts)
+  (when (nes-trace-enabled? sys)
+    (displayln (trace-line (nes-cpu sys))))
 
-      ;; Normal execution
-      (let ([cycles-before (cpu-cycles cpu)])
-        ;; Print trace if enabled
-        (when (nes-trace-enabled? sys)
-          (displayln (trace-line cpu)))
+  ;; Run ticks until an instruction completes
+  (let loop ()
+    (unless (nes-tick! sys)
+      (loop)))
 
-        ;; Execute one instruction
-        (cpu-step! cpu)
-
-        ;; Calculate cycles consumed
-        (define cycles-after (cpu-cycles cpu))
-        (define cycles (- cycles-after cycles-before))
-
-        ;; Handle OAM DMA stall if triggered during this instruction
-        ;; DMA alignment is based on the cycle count AFTER the instruction completes
-        ;; (DMA starts on the next cycle after the write to $4014)
-        (when (unbox (nes-dma-pending-box sys))
-          (set-box! (nes-dma-pending-box sys) #f)
-          (set-box! (nes-dma-stall-box sys)
-                    (+ (unbox (nes-dma-stall-box sys))
-                       (oam-dma-cycles cycles-after))))
-
-        ;; Update total cycles
-        (set-box! (nes-total-cycles-box sys)
-                  (+ (unbox (nes-total-cycles-box sys)) cycles))
-
-        ;; Tick PPU by cycles * 3 (PPU runs 3x faster than CPU)
-        (ppu-tick! sys (* cycles 3))
-
-        ;; Tick APU by cycles (APU runs at CPU clock rate)
-        (apu-tick! (nes-apu sys) cycles)
-
-        ;; Call audio callback if set
-        (define audio-cb (unbox (nes-audio-callback-box sys)))
-        (when audio-cb
-          (audio-cb (apu-output (nes-apu sys)) cycles))
-
-        ;; Check for DMC DMA stall cycles and add to stall counter
-        (define dmc-stall (apu-dmc-stall-cycles (nes-apu sys)))
-        (when (> dmc-stall 0)
-          (set-box! (nes-dma-stall-box sys)
-                    (+ (unbox (nes-dma-stall-box sys)) dmc-stall))
-          ;; Update CPU open bus with the fetched byte
-          (cpu-set-openbus! cpu (apu-dmc-last-fetch-byte (nes-apu sys)))
-          (apu-clear-dmc-stall-cycles! (nes-apu sys)))
-
-        ;; NMI edge detection: fire NMI when nmi_output goes LOW->HIGH
-        ;; nmi_output = nmi_occurred AND nmi_enabled (PPUCTRL bit 7)
-        ;;
-        ;; There are two sources of NMI edges:
-        ;; 1. PPU-driven: VBlank sets nmi_occurred during PPU tick
-        ;;    -> fires immediately after this instruction
-        ;; 2. Software-driven: $2000 write enables NMI while VBlank is set
-        ;;    -> fires after the NEXT instruction (1-instruction delay)
-        ;;
-        ;; The delay counter handles case 2. PPU tick handles case 1.
-        (define prev-nmi (unbox (nes-prev-nmi-box sys)))
-        (define curr-nmi (ppu-nmi-output? p))
-        (define delay (unbox (nes-nmi-delay-box sys)))
-
-        ;; Handle software-triggered NMI delay (from $2000 write)
-        ;; When $2000 write enables NMI while VBlank is set, NMI fires
-        ;; after the NEXT instruction completes.
-        ;; delay=2 → 1 → 0 and fire
-        (when (> delay 0)
-          (define new-delay (- delay 1))
-          (set-box! (nes-nmi-delay-box sys) new-delay)
-          (when (= new-delay 0)
-            ;; Delay expired, fire NMI if output still high
-            (when curr-nmi
-              (set-cpu-nmi-pending! cpu #t))))
-
-        ;; Handle PPU-driven NMI edge (VBlank started during PPU tick)
-        ;; This fires immediately (no delay needed)
-        (when (and (= delay 0)  ; Only if no software delay in progress
-                   (not prev-nmi)
-                   curr-nmi)
-          (set-cpu-nmi-pending! cpu #t))
-
-        (set-box! (nes-prev-nmi-box sys) curr-nmi)
-
-        ;; Check for APU IRQ and signal to CPU
-        (when (apu-irq-pending? (nes-apu sys))
-          (set-cpu-irq-pending! cpu #t))
-
-        ;; Check for mapper IRQ (e.g., MMC3 scanline counter)
-        (when ((mapper-irq-pending? (nes-mapper sys)))
-          (set-cpu-irq-pending! cpu #t))
-
-        cycles)))
+  ;; Return cycles consumed
+  (- (nes-total-cycles sys) cycles-before))
 
 ;; Advance PPU by the given number of PPU cycles
 ;; Updates scanline/cycle counters and handles VBlank/NMI
@@ -612,157 +500,14 @@
        (set-ppu-cycle! p next-cycle)])))
 
 ;; Run until the next frame boundary (when PPU reaches scanline 0)
-;; Uses Mode A (instruction-stepped) timing
 (define (nes-run-frame! sys)
   (define p (nes-ppu sys))
   (define start-frame (ppu-frame p))
 
-  ;; Run until the PPU frame counter advances
-  (let loop ()
-    (when (= (ppu-frame p) start-frame)
-      (nes-step! sys)
-      (loop))))
-
-;; Run until the next frame boundary using Mode B (cycle-interleaved) timing
-;; This is slower but more accurate for timing-sensitive games
-(define (nes-run-frame-tick! sys)
-  (define p (nes-ppu sys))
-  (define start-frame (ppu-frame p))
-
-  ;; Run until the PPU frame counter advances
+  ;; Run ticks until the PPU frame counter advances
   (let loop ()
     (when (= (ppu-frame p) start-frame)
       (nes-tick! sys)
-      (loop))))
-
-;; ============================================================================
-;; Fast Execution (Headless Mode)
-;; ============================================================================
-;; These functions intentionally skip expensive PPU operations for speed.
-;; Use for test automation, CPU validation, and headless operation.
-;;
-;; ppu-tick-fast! vs ppu-tick! differences (by design):
-;; - Skips odd frame cycle skip (minor timing difference)
-;; - Skips scroll register copying at cycles 257, 280-304 (no visual output)
-;; - Skips scanline scroll capture (no rendering)
-;; - Skips sprite 0 hit detection (games relying on this will break)
-;; - Skips sprite overflow detection (rarely used by games)
-;; - Skips mapper scanline tick (MMC3 IRQ won't work)
-;;
-;; Games that need sprite 0 hit, MMC3 IRQ, or mid-frame scroll effects
-;; must use the full nes-step!/ppu-tick! path.
-
-;; Fast PPU tick - only updates position and triggers VBlank/NMI
-(define (ppu-tick-fast! sys ppu-cycles)
-  (define p (nes-ppu sys))
-
-  (for ([_ (in-range ppu-cycles)])
-    (define cycle (ppu-cycle p))
-    (define scanline (ppu-scanline p))
-
-    ;; VBlank start: scanline 241, cycle 1
-    (when (and (= scanline SCANLINE-VBLANK-START)
-               (= cycle 1))
-      (set-ppu-nmi-occurred! p #t)
-      (when (ppu-ctrl-flag? p CTRL-NMI-ENABLE)
-        (set-ppu-nmi-output! p #t)))
-
-    ;; Pre-render scanline: clear flags at cycle 1
-    (when (and (= scanline SCANLINE-PRE-RENDER)
-               (= cycle 1))
-      (set-ppu-nmi-occurred! p #f)
-      (set-ppu-nmi-output! p #f)
-      (set-ppu-sprite0-hit! p #f)
-      (set-ppu-sprite-overflow! p #f))
-
-    ;; Advance position
-    (define next-cycle (+ cycle 1))
-    (cond
-      [(>= next-cycle CYCLES-PER-SCANLINE)
-       (set-ppu-cycle! p 0)
-       (define next-scanline (+ scanline 1))
-       (cond
-         [(>= next-scanline SCANLINES-TOTAL)
-          (set-ppu-scanline! p 0)
-          (set-ppu-frame! p (+ 1 (ppu-frame p)))
-          (set-ppu-odd-frame! p (not (ppu-odd-frame? p)))
-          (set-box! (nes-frame-count-box sys)
-                    (+ 1 (unbox (nes-frame-count-box sys))))]
-         [else
-          (set-ppu-scanline! p next-scanline)])]
-      [else
-       (set-ppu-cycle! p next-cycle)])))
-
-;; Fast step - minimal PPU/APU processing for headless mode
-;; Skips: sprite 0 hit detection, scroll register operations, audio output
-(define (nes-step-fast! sys)
-  (define cpu (nes-cpu sys))
-  (define dma-stall (unbox (nes-dma-stall-box sys)))
-
-  (if (> dma-stall 0)
-      ;; DMA stall: consume stall cycles
-      (let ([stall-cycles (min dma-stall 1)])
-        (set-box! (nes-dma-stall-box sys) (- dma-stall stall-cycles))
-        (set-box! (nes-total-cycles-box sys)
-                  (+ (unbox (nes-total-cycles-box sys)) stall-cycles))
-        (ppu-tick-fast! sys (* stall-cycles 3))
-        stall-cycles)
-
-      ;; Normal execution
-      (let ([cycles-before (cpu-cycles cpu)]
-            [p (nes-ppu sys)])
-        ;; Execute one instruction
-        (cpu-step! cpu)
-
-        ;; Calculate cycles consumed
-        (define cycles-after (cpu-cycles cpu))
-        (define cycles (- cycles-after cycles-before))
-
-        ;; Handle OAM DMA stall if triggered during this instruction
-        (when (unbox (nes-dma-pending-box sys))
-          (set-box! (nes-dma-pending-box sys) #f)
-          (set-box! (nes-dma-stall-box sys)
-                    (+ (unbox (nes-dma-stall-box sys))
-                       (oam-dma-cycles cycles-after))))
-
-        ;; Update total cycles
-        (set-box! (nes-total-cycles-box sys)
-                  (+ (unbox (nes-total-cycles-box sys)) cycles))
-
-        ;; Fast PPU tick (only VBlank/NMI timing)
-        (ppu-tick-fast! sys (* cycles 3))
-
-        ;; NMI edge detection (same as nes-step!)
-        (define prev-nmi (unbox (nes-prev-nmi-box sys)))
-        (define curr-nmi (ppu-nmi-output? p))
-        (define delay (unbox (nes-nmi-delay-box sys)))
-
-        ;; Handle software-triggered NMI delay
-        (when (> delay 0)
-          (define new-delay (- delay 1))
-          (set-box! (nes-nmi-delay-box sys) new-delay)
-          (when (= new-delay 0)
-            (when curr-nmi
-              (set-cpu-nmi-pending! cpu #t))))
-
-        ;; Handle PPU-driven NMI edge
-        (when (and (= delay 0)
-                   (not prev-nmi)
-                   curr-nmi)
-          (set-cpu-nmi-pending! cpu #t))
-
-        (set-box! (nes-prev-nmi-box sys) curr-nmi)
-
-        cycles)))
-
-;; Run one frame in fast mode
-(define (nes-run-frame-fast! sys)
-  (define p (nes-ppu sys))
-  (define start-frame (ppu-frame p))
-
-  (let loop ()
-    (when (= (ppu-frame p) start-frame)
-      (nes-step-fast! sys)
       (loop))))
 
 ;; ============================================================================

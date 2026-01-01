@@ -38,10 +38,11 @@ ln -sf . nes  # Create symlink so collection resolves
 
 ## Key Design Patterns
 
-**Timing**: Mode A (instruction-stepped) first, Mode B (cycle-interleaved) later.
-- CPU executes one instruction, reports cycles consumed
-- PPU advances by `cycles * 3`
-- APU advances by `cycles`
+**Timing**: Cycle-accurate execution via `nes-tick!`.
+- `nes-tick!` executes one CPU cycle, returns true when instruction completes
+- PPU advances by 3 dots per CPU cycle
+- APU advances by 1 cycle per CPU cycle
+- `nes-step!` wraps `nes-tick!` for instruction-at-a-time execution
 
 **Bus**: Handler-based dispatch with mirroring support and open bus behavior.
 

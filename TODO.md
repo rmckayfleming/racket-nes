@@ -4,43 +4,45 @@ This document tracks work needed to improve emulator accuracy, primarily driven 
 
 ## Current Status
 
-**AccuracyCoin Results (Mode A):** 83 passed, 46 failed, 5 draw
-**AccuracyCoin Results (Mode B):** 87 passed, 40 failed, 5 draw
+**AccuracyCoin Results:** 87 passed, 40 failed, 5 draw
 
-Mode B now passes 4 more tests than Mode A! Controller clocking test passes only in Mode B.
+The emulator now uses a unified cycle-accurate execution model. The previous
+"Mode A" (instruction-stepped) and "Mode B" (cycle-interleaved) distinction
+has been removed. All execution now uses cycle-accurate timing via `nes-tick!`.
 
 **Primary Test Command:**
 ```bash
 PLTCOLLECTS="$PWD:" racket test/harness/accuracy-coin.rkt --failures
-PLTCOLLECTS="$PWD:" racket test/harness/accuracy-coin.rkt --failures --tick  # Mode B
 ```
 
 ---
 
-## Phase 1: Mode B Regressions (COMPLETE ✅)
+## Phase 1: Cycle-Accurate Execution (COMPLETE ✅)
 
-Fixed the Mode B regressions that previously caused 15 additional failures.
+Unified the execution model to use cycle-accurate timing throughout.
 
 ### 1.1 Illegal Opcode Page-Crossing Timing ✅
-All illegal RMW opcodes now pass in Mode B:
+All illegal RMW opcodes now pass:
 - [x] All SLO/RLA/SRE/RRA/DCP/ISC opcodes in (indirect,X), (indirect),Y, and abs,Y modes
 
 **Fix:** Added proper RMW cycle handlers (`execute-rmw-absy!`, `execute-rmw-indx!`, `execute-rmw-indy!`)
 in `lib/6502/cycle-cpu.rkt` with correct 7-8 cycle timing.
 
 ### 1.2 Instruction Timing ✅
-- [x] INSTRUCTION TIMING test now passes in Mode B
+- [x] INSTRUCTION TIMING test passes
 
 **Fix:** Corrected NMI/IRQ interrupt sequence from 8 cycles to 7 cycles with proper dummy read
 on first cycle.
 
 ### 1.3 Controller Clocking ✅
-- [x] CONTROLLER CLOCKING passes in Mode B only (Mode A fails with error 5)
-  - This was already a Mode B improvement!
+- [x] CONTROLLER CLOCKING passes (requires cycle-accurate execution)
 
-### 1.4 Additional Mode B Fixes
-- [x] Fixed cpu-reset! to clear Mode B instruction state (prevents mid-instruction resume after reset)
-- [x] Fixed unstable store opcodes (SHY/SHX/SHA/SHS) to write correct values in Mode B
+### 1.4 Unified Execution Model ✅
+- [x] Removed dual-mode (Mode A/Mode B) architecture
+- [x] `nes-step!` now wraps `nes-tick!` for instruction-at-a-time execution
+- [x] All execution uses cycle-accurate timing
+- [x] Fixed cpu-reset! to clear instruction state
+- [x] Fixed unstable store opcodes (SHY/SHX/SHA/SHS)
 
 ---
 
@@ -64,7 +66,7 @@ verified until DMC DMA updates the CPU's open bus value.
 unmapped reads. Also, DMC DMA doesn't update CPU open bus on sample fetch.
 
 ### 2.3 Unofficial Instructions
-- [ ] ALL NOP INSTRUCTIONS (error 2) — Unofficial NOP timing (Mode A only)
+- [ ] ALL NOP INSTRUCTIONS (error 2) — Unofficial NOP timing
 
 ### 2.4 SHA/SHX/SHY/SHS Illegal Opcodes
 These tests fail with error 7 (RDY line timing during DMA):
@@ -127,7 +129,7 @@ Error 7 means address calculation is wrong when RDY goes low before write cycle.
 ## Phase 6: Controller Timing
 
 - [ ] CONTROLLER STROBING (error 3) — Strobe timing precision
-- [ ] CONTROLLER CLOCKING (error 5 in Mode A, passes in Mode B)
+- [x] CONTROLLER CLOCKING ✅ — Passes with cycle-accurate execution
 
 ---
 
@@ -163,11 +165,12 @@ Error 7 means address calculation is wrong when RDY goes low before write cycle.
 
 ## Completed Work
 
-### Mode B Infrastructure ✅
+### Cycle-Accurate Infrastructure ✅
 - [x] Cycle-stepped CPU (`lib/6502/cycle-cpu.rkt`)
 - [x] Master tick function (`nes-tick!`)
-- [x] Frame execution (`nes-run-frame-tick!`)
+- [x] Frame execution (`nes-run-frame!`)
 - [x] DMA integration with cycle stepping
+- [x] Unified execution model (removed Mode A/B split)
 - [x] All ppu_vbl_nmi tests pass (1-10)
 - [x] nestest 5003 steps pass
 - [x] 205 unit tests pass
@@ -175,7 +178,6 @@ Error 7 means address calculation is wrong when RDY goes low before write cycle.
 ### AccuracyCoin Harness ✅
 - [x] Automatic test execution
 - [x] Screen parsing for results
-- [x] Mode A/B support
 - [x] PASS/FAIL/DRAW detection
 - [x] Detailed failure reporting
 

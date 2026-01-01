@@ -40,6 +40,7 @@
  cpu-read cpu-write cpu-read16
 
  ;; Open bus (for DMA integration)
+ cpu-openbus
  cpu-set-openbus!
 
  ;; Control
@@ -174,6 +175,10 @@
 (define (cpu-read16 c addr)
   (merge16 (cpu-read c addr)
            (cpu-read c (u16 (+ addr 1)))))
+
+;; Get current open bus value
+(define (cpu-openbus c)
+  (unbox (cpu-openbus-box c)))
 
 ;; Set open bus value directly (for DMA that bypasses cpu-read)
 (define (cpu-set-openbus! c val)

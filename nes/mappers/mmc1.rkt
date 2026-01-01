@@ -190,8 +190,8 @@
       [(>= addr #x8000)
        (bytes-ref prg-rom (prg-offset addr))]
 
-      ;; $4020-$5FFF: Expansion (not used)
-      [else #x00]))
+      ;; $4020-$5FFF: Expansion (not used) - return open bus
+      [else #f]))
 
   ;; --- CPU Write ($4020-$FFFF) ---
   (define (cpu-write addr val)

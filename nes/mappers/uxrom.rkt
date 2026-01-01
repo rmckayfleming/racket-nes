@@ -68,8 +68,8 @@
        (define offset (+ last-bank-offset (- addr #xC000)))
        (bytes-ref prg-rom offset)]
 
-      ;; $4020-$7FFF: Not used by UxROM
-      [else #x00]))
+      ;; $4020-$7FFF: Not used by UxROM - return open bus
+      [else #f]))
 
   ;; --- CPU Write ($4020-$FFFF) ---
   (define (cpu-write addr val)

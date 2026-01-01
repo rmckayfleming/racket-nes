@@ -42,7 +42,10 @@
  nes-memory-set-cart-write!
 
  ;; DMA hook
- nes-memory-set-dma-write!)
+ nes-memory-set-dma-write!
+
+ ;; Open bus hook
+ nes-memory-set-openbus-read!)
 
 (require "../lib/bus.rkt"
          "../lib/bits.rkt")
@@ -68,7 +71,9 @@
    cart-read-box    ; (addr -> byte)
    cart-write-box   ; (addr byte -> void)
    ;; DMA callback
-   dma-write-box)   ; (page -> void), triggers OAM DMA
+   dma-write-box    ; (page -> void), triggers OAM DMA
+   ;; Open bus callback
+   openbus-read-box) ; (-> byte), returns current CPU open bus value
   #:transparent)
 
 ;; ============================================================================
@@ -102,6 +107,9 @@
 (define (nes-memory-set-dma-write! mem proc)
   (set-box! (nes-memory-dma-write-box mem) proc))
 
+(define (nes-memory-set-openbus-read! mem proc)
+  (set-box! (nes-memory-openbus-read-box mem) proc))
+
 ;; ============================================================================
 ;; Memory Map Construction
 ;; ============================================================================
@@ -120,6 +128,7 @@
   (define cart-read-box (box (λ (addr) #x00)))
   (define cart-write-box (box (λ (addr val) (void))))
   (define dma-write-box (box (λ (page) (void))))
+  (define openbus-read-box (box (λ () #x00)))
 
   ;; Create bus
   (define b (make-bus))
@@ -175,19 +184,22 @@
                     #:name 'apu-io)
 
   ;; --- APU Test Registers $4018-$401F (normally disabled) ---
+  ;; These addresses are unmapped and return open bus value
   (bus-add-handler! b
                     #:start #x4018
                     #:end #x401F
-                    #:read (λ (addr) #x00)  ; Open bus behavior
+                    #:read (λ (addr) ((unbox openbus-read-box)))
                     #:write (λ (addr val) (void))
                     #:name 'apu-test)
 
   ;; --- Cartridge Space $4020-$FFFF ---
+  ;; Mapper can return #f for unmapped regions, in which case we use open bus
   (bus-add-handler! b
                     #:start #x4020
                     #:end #xFFFF
                     #:read (λ (addr)
-                             ((unbox cart-read-box) addr))
+                             (define v ((unbox cart-read-box) addr))
+                             (if v v ((unbox openbus-read-box))))
                     #:write (λ (addr val)
                               ((unbox cart-write-box) addr val))
                     #:name 'cartridge)
@@ -198,7 +210,8 @@
               apu-read-box apu-write-box
               ctrl-read-box ctrl-write-box
               cart-read-box cart-write-box
-              dma-write-box))
+              dma-write-box
+              openbus-read-box))
 
 ;; ============================================================================
 ;; Module Tests
