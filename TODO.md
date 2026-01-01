@@ -48,26 +48,34 @@ on first cycle.
 
 ### 2.1 Dummy Read/Write Cycles
 Both modes fail:
+- [x] IMPLIED DUMMY READS (code done, but blocked by DMC DMA prerequisite - error 3)
 - [ ] DUMMY READ CYCLES (error 1)
 - [ ] DUMMY WRITE CYCLES (error 2)
-- [ ] IMPLIED DUMMY READS (error 2)
+
+**Note:** The IMPLIED DUMMY READS test uses DMC DMA to detect reads. Error 3 means
+"DMC DMA data bus not updated" - so dummy read code is likely correct but can't be
+verified until DMC DMA updates the CPU's open bus value.
 
 ### 2.2 Open Bus Behavior
 - [ ] OPEN BUS (error 1) — CPU open bus emulation
+- [ ] JSR EDGE CASES (error 2) — Open bus during JSR (prerequisite: open bus)
+
+**Root Cause:** Open bus value is tracked in CPU but not used by memory map for
+unmapped reads. Also, DMC DMA doesn't update CPU open bus on sample fetch.
 
 ### 2.3 Unofficial Instructions
-- [ ] ALL NOP INSTRUCTIONS (error 2) — Unofficial NOP timing
+- [ ] ALL NOP INSTRUCTIONS (error 2) — Unofficial NOP timing (Mode A only)
 
-### 2.4 JSR Edge Cases
-- [ ] JSR EDGE CASES (error 2) — Stack timing edge cases
-
-### 2.5 SHA/SHX/SHY/SHS Illegal Opcodes
-These "unstable" opcodes have complex AND behavior:
-- [ ] $93 SHA INDIRECT'Y (error 0)
-- [ ] $9F SHA ABSOLUTE'Y (error 0)
-- [ ] $9B SHS ABSOLUTE'Y (error 1)
+### 2.4 SHA/SHX/SHY/SHS Illegal Opcodes
+These tests fail with error 7 (RDY line timing during DMA):
+- [ ] $93 SHA INDIRECT'Y (error 7)
+- [ ] $9F SHA ABSOLUTE'Y (error 7)
+- [ ] $9B SHS ABSOLUTE'Y (error 7)
 - [ ] $9C SHY ABSOLUTE'X (error 1)
 - [ ] $9E SHX ABSOLUTE'Y (error 1)
+
+**Root Cause:** Values are computed correctly, but tests use DMA to check timing.
+Error 7 means address calculation is wrong when RDY goes low before write cycle.
 
 ---
 
