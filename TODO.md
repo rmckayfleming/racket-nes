@@ -5,9 +5,9 @@ This document tracks work needed to improve emulator accuracy, primarily driven 
 ## Current Status
 
 **AccuracyCoin Results (Mode A):** 83 passed, 46 failed, 5 draw
-**AccuracyCoin Results (Mode B):** 69 passed, 61 failed, 5 draw
+**AccuracyCoin Results (Mode B):** 87 passed, 40 failed, 5 draw
 
-Mode B has 15 additional failures, primarily in illegal opcode page-crossing timing.
+Mode B now passes 4 more tests than Mode A! Controller clocking test passes only in Mode B.
 
 **Primary Test Command:**
 ```bash
@@ -17,39 +17,30 @@ PLTCOLLECTS="$PWD:" racket test/harness/accuracy-coin.rkt --failures --tick  # M
 
 ---
 
-## Phase 1: Mode B Regressions (ACTIVE)
+## Phase 1: Mode B Regressions (COMPLETE ✅)
 
-Fix the 15 additional failures that appear in Mode B but not Mode A.
+Fixed the Mode B regressions that previously caused 15 additional failures.
 
-### 1.1 Illegal Opcode Page-Crossing Timing
-Mode B fails these but Mode A passes:
-- [ ] $03 SLO INDIRECT'X
-- [ ] $13 SLO INDIRECT'Y
-- [ ] $1B SLO ABSOLUTE'Y
-- [ ] $23 RLA INDIRECT'X
-- [ ] $33 RLA INDIRECT'Y
-- [ ] $3B RLA ABSOLUTE'Y
-- [ ] $43 SRE INDIRECT'X
-- [ ] $53 SRE INDIRECT'Y
-- [ ] $5B SRE ABSOLUTE'Y
-- [ ] $63 RRA INDIRECT'X
-- [ ] $73 RRA INDIRECT'Y
-- [ ] $7B RRA ABSOLUTE'Y
-- [ ] $C3 DCP INDIRECT'X
-- [ ] $D3 DCP INDIRECT'Y
-- [ ] $DB DCP ABSOLUTE'Y
-- [ ] $E3 ISC INDIRECT'X
-- [ ] $F3 ISC INDIRECT'Y
-- [ ] $FB ISC ABSOLUTE'Y
+### 1.1 Illegal Opcode Page-Crossing Timing ✅
+All illegal RMW opcodes now pass in Mode B:
+- [x] All SLO/RLA/SRE/RRA/DCP/ISC opcodes in (indirect,X), (indirect),Y, and abs,Y modes
 
-**Root Cause:** Likely dummy cycle timing on page-crossed indexed reads for read-modify-write illegal ops.
+**Fix:** Added proper RMW cycle handlers (`execute-rmw-absy!`, `execute-rmw-indx!`, `execute-rmw-indy!`)
+in `lib/6502/cycle-cpu.rkt` with correct 7-8 cycle timing.
 
-### 1.2 Instruction Timing
-- [ ] INSTRUCTION TIMING test fails in Mode B only
+### 1.2 Instruction Timing ✅
+- [x] INSTRUCTION TIMING test now passes in Mode B
 
-### 1.3 Controller Clocking
-- [ ] CONTROLLER CLOCKING passes in Mode B but fails in Mode A (error 5 → passes)
-  - This is actually a Mode B improvement!
+**Fix:** Corrected NMI/IRQ interrupt sequence from 8 cycles to 7 cycles with proper dummy read
+on first cycle.
+
+### 1.3 Controller Clocking ✅
+- [x] CONTROLLER CLOCKING passes in Mode B only (Mode A fails with error 5)
+  - This was already a Mode B improvement!
+
+### 1.4 Additional Mode B Fixes
+- [x] Fixed cpu-reset! to clear Mode B instruction state (prevents mid-instruction resume after reset)
+- [x] Fixed unstable store opcodes (SHY/SHX/SHA/SHS) to write correct values in Mode B
 
 ---
 

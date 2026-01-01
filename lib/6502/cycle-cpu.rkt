@@ -38,6 +38,7 @@
  cpu-tick!
  cpu-instruction-cycle
  cpu-at-instruction-boundary?
+ cpu-reset-cycle-state!  ; Reset cycle-stepped state (call after cpu-reset!)
 
  ;; Instruction state for debugging
  cpu-current-opcode
@@ -103,6 +104,20 @@
 (define (cpu-instruction-state c)
   (get-instr-state c))
 
+;; Reset cycle-stepped state (should be called after cpu-reset!)
+;; This clears the mid-instruction state so the CPU starts fresh at cycle 0
+(define (cpu-reset-cycle-state! c)
+  (define state (get-instr-state c))
+  (set-instr-state-opcode! state 0)
+  (set-instr-state-cycle! state 0)
+  (set-instr-state-total-cycles! state 0)
+  (set-instr-state-addr-lo! state 0)
+  (set-instr-state-addr-hi! state 0)
+  (set-instr-state-pointer! state 0)
+  (set-instr-state-data! state 0)
+  (set-instr-state-effective-addr! state 0)
+  (set-instr-state-page-crossed?! state #f))
+
 ;; ============================================================================
 ;; Cycle Tables
 ;; ============================================================================
@@ -163,14 +178,18 @@
         (cond
           [(cpu-nmi-pending? c)
            (set-cpu-nmi-pending! c #f)
-           ;; Set up for NMI sequence (7 cycles, but we use 8 because cycle 1 is the
-           ;; "fetch" cycle that's handled here, then cycles 2-8 are the interrupt sequence)
-           (reset-instr-state! state #x00 8)
+           ;; NMI sequence is 7 cycles total:
+           ;; Cycle 1: Dummy read at PC (this tick)
+           ;; Cycles 2-7: Push PC/P, fetch vector, set PC
+           (cpu-read c (cpu-pc c))  ; Dummy read at current PC
+           (reset-instr-state! state #x00 7)
            (set-instr-state-data! state 'nmi)]
 
           [(and (cpu-irq-pending? c) (not (cpu-flag? c flag-i)))
            (set-cpu-irq-pending! c #f)
-           (reset-instr-state! state #x00 8)
+           ;; IRQ sequence is 7 cycles total (same as NMI)
+           (cpu-read c (cpu-pc c))  ; Dummy read at current PC
+           (reset-instr-state! state #x00 7)
            (set-instr-state-data! state 'irq)]
 
           [else
@@ -212,27 +231,25 @@
 ;; ============================================================================
 
 ;; Interrupt sequence: 7 cycles total
-;; Cycle 1 is handled by cpu-tick! (the "fetch" that detects the interrupt)
-;; So execute-interrupt-cycle! handles cycles 2-8 (really cycles 2-7 of the sequence)
-;; With total-cycles=8, we execute cycles 1-7 here before completion check passes
+;; Cycle 1: Dummy read at PC (handled by cpu-tick! when detecting interrupt)
+;; Cycles 2-7: Push PC/P, fetch vector, set PC
+;; execute-interrupt-cycle! handles cycles 2-7 (cycle parameter is 1-6)
 (define (execute-interrupt-cycle! c state cycle vector)
   (case cycle
-    [(1) ; Cycle 2 of sequence: Internal operation (read and discard)
-     (void)]
-    [(2) ; Cycle 3: Push PC high
+    [(1) ; Cycle 2: Push PC high
      (cpu-push8! c (hi (cpu-pc c)))]
-    [(3) ; Cycle 4: Push PC low
+    [(2) ; Cycle 3: Push PC low
      (cpu-push8! c (lo (cpu-pc c)))]
-    [(4) ; Cycle 5: Push P (B flag clear for interrupts)
+    [(3) ; Cycle 4: Push P (B flag clear for interrupts)
      (cpu-push8! c (set-bit (clear-bit (cpu-p c) flag-b) 5))]
-    [(5) ; Cycle 6: Fetch vector low
+    [(4) ; Cycle 5: Fetch vector low
      (set-instr-state-addr-lo! state (cpu-read c vector))]
-    [(6) ; Cycle 7: Fetch vector high
-     (set-instr-state-addr-hi! state (cpu-read c (+ vector 1)))]
-    [(7) ; Cycle 8: Set PC to vector, set I flag
+    [(5) ; Cycle 6: Fetch vector high, set I flag
+     (set-instr-state-addr-hi! state (cpu-read c (+ vector 1)))
+     (set-cpu-flag! c flag-i)]
+    [(6) ; Cycle 7: Set PC to vector
      (set-cpu-pc! c (merge16 (instr-state-addr-lo state)
-                             (instr-state-addr-hi state)))
-     (set-cpu-flag! c flag-i)]))
+                             (instr-state-addr-hi state)))]))
 
 ;; ============================================================================
 ;; Instruction Cycle Execution
@@ -268,6 +285,9 @@
     [(rmw-zpx)     (execute-rmw-zpx! c state opcode cycle)]
     [(rmw-abs)     (execute-rmw-abs! c state opcode cycle)]
     [(rmw-absx)    (execute-rmw-absx! c state opcode cycle)]
+    [(rmw-absy)    (execute-rmw-absy! c state opcode cycle)]
+    [(rmw-indx)    (execute-rmw-indx! c state opcode cycle)]
+    [(rmw-indy)    (execute-rmw-indy! c state opcode cycle)]
     [else
      (error 'cpu-tick! "unhandled opcode pattern: ~a for opcode $~a"
             pattern
@@ -355,7 +375,7 @@
       #xBF                                 ; *LAX
       #x9E #x9F #x9B #xBB                  ; *SHX/*AHX/*TAS/*LAS
       #xDB #xFB #x1B #x3B #x5B #x7B)       ; Illegal RMW
-     (if (is-rmw-opcode? opcode) 'absolute-y 'absolute-y)]  ; abs,Y RMW is 7 cycles, no skip
+     (if (is-rmw-opcode? opcode) 'rmw-absy 'absolute-y)]
 
     ;; Indirect (JMP only)
     [(#x6C) 'jmp-ind]
@@ -367,7 +387,7 @@
       #x21 #x01 #x41                       ; AND/ORA/EOR
       #xA3 #x83                            ; *LAX/*SAX
       #xC3 #xE3 #x03 #x23 #x43 #x63)       ; Illegal
-     'indirect-x]
+     (if (is-rmw-opcode? opcode) 'rmw-indx 'indirect-x)]
 
     ;; Indirect Indexed (Y)
     [(#xB1 #x91                            ; LDA/STA
@@ -376,7 +396,7 @@
       #x31 #x11 #x51                       ; AND/ORA/EOR
       #xB3 #x93                            ; *LAX/*AHX
       #xD3 #xF3 #x13 #x33 #x53 #x73)       ; Illegal
-     'indirect-y]
+     (if (is-rmw-opcode? opcode) 'rmw-indy 'indirect-y)]
 
     ;; Relative (branches)
     [(#x10 #x30 #x50 #x70 #x90 #xB0 #xD0 #xF0) 'relative]
@@ -631,7 +651,8 @@
     [(4) ; Cycle 5: Final read/write
      (define addr (instr-state-effective-addr state))
      (if (is-write-opcode? opcode)
-         (cpu-write c addr (get-write-value c opcode))
+         ;; Pass addr-hi for unstable store opcodes (high byte BEFORE adding index)
+         (cpu-write c addr (get-write-value c opcode (instr-state-addr-hi state)))
          (execute-read-op! c opcode (cpu-read c addr)))]))
 
 ;; ============================================================================
@@ -674,7 +695,8 @@
     [(4)
      (define addr (instr-state-effective-addr state))
      (if (is-write-opcode? opcode)
-         (cpu-write c addr (get-write-value c opcode))
+         ;; Pass addr-hi for unstable store opcodes (high byte BEFORE adding index)
+         (cpu-write c addr (get-write-value c opcode (instr-state-addr-hi state)))
          (execute-read-op! c opcode (cpu-read c addr)))]))
 
 ;; ============================================================================
@@ -702,7 +724,8 @@
     [(5) ; Cycle 6: Read/write
      (define addr (instr-state-effective-addr state))
      (if (is-write-opcode? opcode)
-         (cpu-write c addr (get-write-value c opcode))
+         ;; Pass addr-hi for unstable store opcodes (high byte of indirect address)
+         (cpu-write c addr (get-write-value c opcode (instr-state-addr-hi state)))
          (execute-read-op! c opcode (cpu-read c addr)))]))
 
 ;; ============================================================================
@@ -747,7 +770,8 @@
     [(5) ; Cycle 6: Final read/write
      (define addr (instr-state-effective-addr state))
      (if (is-write-opcode? opcode)
-         (cpu-write c addr (get-write-value c opcode))
+         ;; Pass addr-hi for unstable store opcodes (high byte BEFORE adding index)
+         (cpu-write c addr (get-write-value c opcode (instr-state-addr-hi state)))
          (execute-read-op! c opcode (cpu-read c addr)))]))
 
 ;; ============================================================================
@@ -1048,6 +1072,96 @@
      (cpu-write c (instr-state-effective-addr state) result)]))
 
 ;; ============================================================================
+;; RMW Instructions - Absolute,Y (7 cycles)
+;; ============================================================================
+
+(define (execute-rmw-absy! c state opcode cycle)
+  (case cycle
+    [(1) ; Cycle 2: Fetch address low
+     (define pc (cpu-pc c))
+     (set-instr-state-addr-lo! state (cpu-read c pc))
+     (set-cpu-pc! c (u16 (+ pc 1)))]
+    [(2) ; Cycle 3: Fetch address high
+     (define pc (cpu-pc c))
+     (define hi (cpu-read c pc))
+     (set-cpu-pc! c (u16 (+ pc 1)))
+     (set-instr-state-addr-hi! state hi)]
+    [(3) ; Cycle 4: Dummy read at wrong address, add Y
+     (define lo (instr-state-addr-lo state))
+     (define hi (instr-state-addr-hi state))
+     (define wrong-addr (merge16 (u8 (+ lo (cpu-y c))) hi))
+     (cpu-read c wrong-addr)
+     (set-instr-state-effective-addr! state (u16 (+ (merge16 lo hi) (cpu-y c))))]
+    [(4) ; Cycle 5: Read value
+     (set-instr-state-data! state (cpu-read c (instr-state-effective-addr state)))]
+    [(5) ; Cycle 6: Dummy write
+     (cpu-write c (instr-state-effective-addr state) (instr-state-data state))]
+    [(6) ; Cycle 7: Write modified value
+     (define result (execute-rmw-op! c opcode (instr-state-data state)))
+     (cpu-write c (instr-state-effective-addr state) result)]))
+
+;; ============================================================================
+;; RMW Instructions - (Indirect,X) (8 cycles)
+;; ============================================================================
+
+(define (execute-rmw-indx! c state opcode cycle)
+  (case cycle
+    [(1) ; Cycle 2: Fetch pointer
+     (define pc (cpu-pc c))
+     (set-instr-state-pointer! state (cpu-read c pc))
+     (set-cpu-pc! c (u16 (+ pc 1)))]
+    [(2) ; Cycle 3: Dummy read, add X
+     (define ptr (instr-state-pointer state))
+     (cpu-read c ptr)
+     (set-instr-state-pointer! state (u8 (+ ptr (cpu-x c))))]
+    [(3) ; Cycle 4: Read effective address low
+     (define ptr (instr-state-pointer state))
+     (set-instr-state-addr-lo! state (cpu-read c ptr))]
+    [(4) ; Cycle 5: Read effective address high
+     (define ptr (instr-state-pointer state))
+     (define hi (cpu-read c (u8 (+ ptr 1))))
+     (set-instr-state-addr-hi! state hi)
+     (set-instr-state-effective-addr! state (merge16 (instr-state-addr-lo state) hi))]
+    [(5) ; Cycle 6: Read value
+     (set-instr-state-data! state (cpu-read c (instr-state-effective-addr state)))]
+    [(6) ; Cycle 7: Dummy write
+     (cpu-write c (instr-state-effective-addr state) (instr-state-data state))]
+    [(7) ; Cycle 8: Write modified value
+     (define result (execute-rmw-op! c opcode (instr-state-data state)))
+     (cpu-write c (instr-state-effective-addr state) result)]))
+
+;; ============================================================================
+;; RMW Instructions - (Indirect),Y (8 cycles)
+;; ============================================================================
+
+(define (execute-rmw-indy! c state opcode cycle)
+  (case cycle
+    [(1) ; Cycle 2: Fetch pointer
+     (define pc (cpu-pc c))
+     (set-instr-state-pointer! state (cpu-read c pc))
+     (set-cpu-pc! c (u16 (+ pc 1)))]
+    [(2) ; Cycle 3: Read base address low
+     (define ptr (instr-state-pointer state))
+     (set-instr-state-addr-lo! state (cpu-read c ptr))]
+    [(3) ; Cycle 4: Read base address high
+     (define ptr (instr-state-pointer state))
+     (define hi-byte (cpu-read c (u8 (+ ptr 1))))
+     (set-instr-state-addr-hi! state hi-byte)]
+    [(4) ; Cycle 5: Dummy read at wrong address, add Y
+     (define lo (instr-state-addr-lo state))
+     (define hi (instr-state-addr-hi state))
+     (define wrong-addr (merge16 (u8 (+ lo (cpu-y c))) hi))
+     (cpu-read c wrong-addr)
+     (set-instr-state-effective-addr! state (u16 (+ (merge16 lo hi) (cpu-y c))))]
+    [(5) ; Cycle 6: Read value
+     (set-instr-state-data! state (cpu-read c (instr-state-effective-addr state)))]
+    [(6) ; Cycle 7: Dummy write
+     (cpu-write c (instr-state-effective-addr state) (instr-state-data state))]
+    [(7) ; Cycle 8: Write modified value
+     (define result (execute-rmw-op! c opcode (instr-state-data state)))
+     (cpu-write c (instr-state-effective-addr state) result)]))
+
+;; ============================================================================
 ;; Instruction Helpers
 ;; ============================================================================
 
@@ -1061,12 +1175,29 @@
      #t]
     [else #f]))
 
-(define (get-write-value c opcode)
+;; Get the value to write for store opcodes
+;; For unstable opcodes, we need the effective address high byte + 1
+;; which should be passed in when known. For now, use a placeholder
+;; that will be replaced with proper handling per addressing mode.
+(define (get-write-value c opcode [addr-hi #f])
   (case opcode
     [(#x85 #x95 #x8D #x9D #x99 #x81 #x91) (cpu-a c)]  ; STA
     [(#x86 #x96 #x8E) (cpu-x c)]                       ; STX
     [(#x84 #x94 #x8C) (cpu-y c)]                       ; STY
     [(#x87 #x97 #x8F #x83) (bitwise-and (cpu-a c) (cpu-x c))]  ; *SAX
+    ;; Unstable store opcodes - these AND registers with (addr_hi + 1)
+    ;; The addr_hi used is the high byte of the address BEFORE adding index
+    ;; Reference: https://www.nesdev.org/wiki/CPU_unofficial_opcodes
+    [(#x9C) ; *SHY abs,X - Y AND (high byte of addr + 1)
+     (bitwise-and (cpu-y c) (+ (or addr-hi 0) 1))]
+    [(#x9E) ; *SHX abs,Y - X AND (high byte of addr + 1)
+     (bitwise-and (cpu-x c) (+ (or addr-hi 0) 1))]
+    [(#x9F #x93) ; *SHA abs,Y / (ind),Y - A AND X AND (high byte of addr + 1)
+     (bitwise-and (cpu-a c) (cpu-x c) (+ (or addr-hi 0) 1))]
+    [(#x9B) ; *TAS/SHS abs,Y - A AND X AND (high byte of addr + 1), also sets SP
+     (define val (bitwise-and (cpu-a c) (cpu-x c)))
+     (set-cpu-sp! c val)  ; TAS also sets SP = A & X
+     (bitwise-and val (+ (or addr-hi 0) 1))]
     [else 0]))
 
 ;; Execute a read operation (LDA, ADC, etc.)

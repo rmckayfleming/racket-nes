@@ -767,6 +767,8 @@
 
   ;; Reset CPU (loads PC from reset vector)
   (cpu-reset! cpu)
+  ;; Reset cycle-stepped state for Mode B
+  (cpu-reset-cycle-state! cpu)
 
   ;; Reset PPU position
   (set-ppu-scanline! p 0)
