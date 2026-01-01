@@ -459,7 +459,10 @@
 
 (define (execute-implied! c state opcode cycle)
   (case cycle
-    [(1) ; Cycle 2: Execute
+    [(1) ; Cycle 2: Dummy read at PC, then execute
+     ;; The 6502 reads the next byte even though it won't be used
+     ;; This dummy read can trigger side effects (e.g., clearing APU Frame IRQ)
+     (cpu-read c (cpu-pc c))
      (case opcode
        ;; NOPs
        [(#x1A #x3A #x5A #x7A #xDA #xFA #xEA) (void)]
@@ -490,7 +493,9 @@
 
 (define (execute-accumulator! c state opcode cycle)
   (case cycle
-    [(1) ; Cycle 2: Execute on accumulator
+    [(1) ; Cycle 2: Dummy read at PC, then execute on accumulator
+     ;; The 6502 reads the next byte even though it won't be used
+     (cpu-read c (cpu-pc c))
      (define a (cpu-a c))
      (case opcode
        [(#x0A) ; ASL A
